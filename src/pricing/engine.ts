@@ -40,6 +40,8 @@ export interface LiveOrder {
   /** collector-side cache so setShadow fires once (report recomputes anyway) */
   tShadowRecorded: boolean;
   maxEdge: bigint | null;
+  /** tick timestamp of the current maxEdge; persisted with it on unregister */
+  maxEdgeMs?: number;
   tShadowKyberRecorded: boolean;
   maxEdgeKyber: bigint | null;
   tShadowBebopRecorded: boolean;
@@ -111,9 +113,22 @@ export class PricingEngine {
   }
 
   unregister(orderHash: string): void {
+    const o = this.orders.get(orderHash);
+    if (o) this.flushMaxEdges(o);
     this.orders.delete(orderHash);
     this.syncSamplers();
     this.kyber?.untrack(orderHash);
+  }
+
+  /** Persist the running max-edge figures once, when the order stops being
+   *  priced. They used to be written on every improvement, which at 1 Hz over
+   *  several live orders produced more statements per second than a hosted
+   *  database can accept. Nothing reads them back mid-flight: the report
+   *  recomputes from ticks, and the dashboard reads decided_outcomes. */
+  private flushMaxEdges(o: LiveOrder): void {
+    if (o.maxEdge !== null) this.db.setMaxEdge(o.orderHash, o.maxEdge, o.maxEdgeMs ?? Date.now());
+    if (o.maxEdgeKyber !== null) this.db.setMaxEdgeKyber(o.orderHash, o.maxEdgeKyber);
+    if (o.maxEdgeBebop !== null) this.db.setMaxEdgeBebop(o.orderHash, o.maxEdgeBebop);
   }
 
   start(): void {
@@ -125,6 +140,8 @@ export class PricingEngine {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    // orders still live at shutdown never pass through unregister()
+    for (const o of this.orders.values()) this.flushMaxEdges(o);
   }
 
   /** A pair's sampler runs iff at least one live order needs its book. */
@@ -522,7 +539,7 @@ export class PricingEngine {
       }
       if (o.maxEdge === null || tick.edgeDefault > o.maxEdge) {
         o.maxEdge = tick.edgeDefault;
-        this.db.setMaxEdge(o.orderHash, tick.edgeDefault, tick.tsMs);
+        o.maxEdgeMs = tick.tsMs;
       }
     }
     if (tick.edgeKyber !== null) {
@@ -532,7 +549,6 @@ export class PricingEngine {
       }
       if (o.maxEdgeKyber === null || tick.edgeKyber > o.maxEdgeKyber) {
         o.maxEdgeKyber = tick.edgeKyber;
-        this.db.setMaxEdgeKyber(o.orderHash, tick.edgeKyber);
       }
     }
     if (tick.edgeBebop !== null) {
@@ -542,7 +558,6 @@ export class PricingEngine {
       }
       if (o.maxEdgeBebop === null || tick.edgeBebop > o.maxEdgeBebop) {
         o.maxEdgeBebop = tick.edgeBebop;
-        this.db.setMaxEdgeBebop(o.orderHash, tick.edgeBebop);
       }
     }
   }

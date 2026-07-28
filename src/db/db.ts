@@ -208,9 +208,39 @@ export class Db {
     return this.tail;
   }
 
+  /** Collapse consecutive inserts that share a statement into one multi-row
+   *  INSERT. Every statement costs a full round trip — ~280ms to a hosted
+   *  database — so a 1 Hz pricing loop over a handful of orders produces writes
+   *  faster than one-at-a-time execution can drain them, and the queue grows
+   *  without bound. Ticks are the bulk of the volume and are all the same
+   *  statement, so merging them is most of the win. */
+  private static merge(batch: Array<{ sql: string; values: unknown[] }>): Array<{
+    sql: string;
+    values: unknown[];
+  }> {
+    const out: Array<{ sql: string; values: unknown[] }> = [];
+    for (const item of batch) {
+      const prev = out[out.length - 1];
+      const mergeable = /^INSERT INTO \w+ \([^)]*\) VALUES \(/i.test(item.sql) && !/RETURNING/i.test(item.sql);
+      if (prev && mergeable && prev.sql.startsWith(item.sql.slice(0, item.sql.indexOf('VALUES')))) {
+        const n = prev.values.length;
+        const marks = item.values.map((_, i) => `$${n + i + 1}`).join(', ');
+        // splice the extra tuple in before any trailing ON CONFLICT clause
+        const conflictAt = prev.sql.search(/\s+ON CONFLICT/i);
+        const head = conflictAt === -1 ? prev.sql : prev.sql.slice(0, conflictAt);
+        const tail = conflictAt === -1 ? '' : prev.sql.slice(conflictAt);
+        prev.sql = `${head}, (${marks})${tail}`;
+        prev.values.push(...item.values);
+      } else {
+        out.push({ sql: item.sql, values: [...item.values] });
+      }
+    }
+    return out;
+  }
+
   private async drain(): Promise<void> {
     if (this.queue.length === 0) return;
-    const batch = this.queue;
+    const batch = Db.merge(this.queue);
     this.queue = [];
     const client = await this.pool.connect();
     try {
