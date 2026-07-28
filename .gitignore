@@ -15,3 +15,6 @@ export/*.zip
 
 .DS_Store
 .vercel/
+
+# generated from src/dash/page.ts by npm run build:static
+public/

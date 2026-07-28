@@ -1,35 +1,32 @@
-/** Columns added after first release; applied additively so an existing DB
- *  (possibly mid-collection) migrates on open without touching old rows. */
-export const MIGRATIONS: Array<{ table: string; column: string; ddl: string }> = [
-  { table: 'ticks', column: 'kyber_out', ddl: 'ALTER TABLE ticks ADD COLUMN kyber_out TEXT' },
-  { table: 'ticks', column: 'kyber_amount_in', ddl: 'ALTER TABLE ticks ADD COLUMN kyber_amount_in TEXT' },
-  { table: 'ticks', column: 'kyber_quote_age_ms', ddl: 'ALTER TABLE ticks ADD COLUMN kyber_quote_age_ms INTEGER' },
-  { table: 'ticks', column: 'kyber_degraded', ddl: 'ALTER TABLE ticks ADD COLUMN kyber_degraded INTEGER' },
-  { table: 'ticks', column: 'kyber_gas_cost', ddl: 'ALTER TABLE ticks ADD COLUMN kyber_gas_cost TEXT' },
-  { table: 'ticks', column: 'kyber_fee', ddl: 'ALTER TABLE ticks ADD COLUMN kyber_fee TEXT' },
-  { table: 'ticks', column: 'edge_kyber', ddl: 'ALTER TABLE ticks ADD COLUMN edge_kyber TEXT' },
-  { table: 'orders', column: 'kyber_only', ddl: 'ALTER TABLE orders ADD COLUMN kyber_only INTEGER NOT NULL DEFAULT 0' },
-  { table: 'ticks', column: 'bebop_out', ddl: 'ALTER TABLE ticks ADD COLUMN bebop_out TEXT' },
-  { table: 'ticks', column: 'bebop_age_ms', ddl: 'ALTER TABLE ticks ADD COLUMN bebop_age_ms INTEGER' },
-  { table: 'ticks', column: 'bebop_degraded', ddl: 'ALTER TABLE ticks ADD COLUMN bebop_degraded INTEGER' },
-  { table: 'ticks', column: 'bebop_gas_cost', ddl: 'ALTER TABLE ticks ADD COLUMN bebop_gas_cost TEXT' },
-  { table: 'ticks', column: 'bebop_fee', ddl: 'ALTER TABLE ticks ADD COLUMN bebop_fee TEXT' },
-  { table: 'ticks', column: 'edge_bebop', ddl: 'ALTER TABLE ticks ADD COLUMN edge_bebop TEXT' },
-  { table: 'orders', column: 't_shadow_bebop_ms', ddl: 'ALTER TABLE orders ADD COLUMN t_shadow_bebop_ms INTEGER' },
-  { table: 'orders', column: 't_shadow_bebop_edge', ddl: 'ALTER TABLE orders ADD COLUMN t_shadow_bebop_edge TEXT' },
-  { table: 'orders', column: 'max_edge_bebop', ddl: 'ALTER TABLE orders ADD COLUMN max_edge_bebop TEXT' },
-  { table: 'orders', column: 't_shadow_kyber_ms', ddl: 'ALTER TABLE orders ADD COLUMN t_shadow_kyber_ms INTEGER' },
-  { table: 'orders', column: 't_shadow_kyber_edge', ddl: 'ALTER TABLE orders ADD COLUMN t_shadow_kyber_edge TEXT' },
-  { table: 'orders', column: 'max_edge_kyber', ddl: 'ALTER TABLE orders ADD COLUMN max_edge_kyber TEXT' },
-];
+/** Postgres schema. Each chain gets its own Postgres *schema* (chain_8453,
+ *  chain_1), which reproduces the SQLite build's one-file-per-chain isolation:
+ *  every query stays unqualified and unfiltered, the search_path decides which
+ *  chain it hits, and the id sequences never collide across chains.
+ *
+ *  Conventions carried over so the query code above this layer barely changed:
+ *    - amounts stay TEXT holding decimal bigints; callers do BigInt(row.x)
+ *    - booleans stay 0/1 smallints, so `=== 1` checks and `= 1` predicates hold
+ *  Millisecond timestamps are BIGINT; db.ts registers an int8 parser so they
+ *  arrive as JS numbers rather than pg's default strings.
+ */
+
+/** Postgres schema name for a chain id. */
+export function schemaFor(chainId: number): string {
+  return `chain_${chainId}`;
+}
+
+/** Additive DDL applied on collector boot. Postgres supports IF NOT EXISTS on
+ *  ADD COLUMN, so these are idempotent and need no probing. Empty for a fresh
+ *  database: every column the SQLite MIGRATIONS added is in SCHEMA below. */
+export const MIGRATIONS: string[] = [];
 
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS runs (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  started_at_ms   INTEGER NOT NULL,
-  ended_at_ms     INTEGER,
-  clean_shutdown  INTEGER NOT NULL DEFAULT 0,
-  clock_skew_ms   INTEGER,
+  id              BIGSERIAL PRIMARY KEY,
+  started_at_ms   BIGINT NOT NULL,
+  ended_at_ms     BIGINT,
+  clean_shutdown  SMALLINT NOT NULL DEFAULT 0,
+  clock_skew_ms   BIGINT,
   config_json     TEXT NOT NULL,
   node_version    TEXT,
   sdk_version     TEXT
@@ -37,10 +34,10 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE TABLE IF NOT EXISTS orders (
   order_hash        TEXT PRIMARY KEY,
-  first_seen_run_id INTEGER NOT NULL REFERENCES runs(id),
-  received_at_ms    INTEGER NOT NULL,
+  first_seen_run_id BIGINT NOT NULL REFERENCES runs(id),
+  received_at_ms    BIGINT NOT NULL,
   source            TEXT NOT NULL CHECK (source IN ('ws','sweep','poll')),
-  late_seen         INTEGER NOT NULL DEFAULT 0,
+  late_seen         SMALLINT NOT NULL DEFAULT 0,
   maker_asset       TEXT NOT NULL,
   taker_asset       TEXT NOT NULL,
   making_amount     TEXT NOT NULL,
@@ -50,44 +47,49 @@ CREATE TABLE IF NOT EXISTS orders (
   pair              TEXT,
   direction         TEXT CHECK (direction IN ('SELL_BASE','BUY_BASE')),
   hedge_asset_kind  TEXT CHECK (hedge_asset_kind IN ('native','weth','erc20')),
-  eligible          INTEGER NOT NULL,
-  kyber_only        INTEGER NOT NULL DEFAULT 0,
+  eligible          SMALLINT NOT NULL,
+  kyber_only        SMALLINT NOT NULL DEFAULT 0,
   skip_reason       TEXT,
-  auction_start_ms  INTEGER,
+  -- rough USD size at receipt. Stored so the dashboard's funnel is a SUM()
+  -- instead of pulling every order row across the wire to price it in JS.
+  size_usd          DOUBLE PRECISION,
+  auction_start_ms  BIGINT,
   auction_duration_s INTEGER,
   initial_rate_bump INTEGER,
   auction_points_json TEXT,
   gas_bump_estimate TEXT,
   gas_price_estimate TEXT,
-  allow_partial_fills INTEGER,
-  allow_multiple_fills INTEGER,
-  deadline_ms       INTEGER,
+  allow_partial_fills SMALLINT,
+  allow_multiple_fills SMALLINT,
+  deadline_ms       BIGINT,
   extension_raw     TEXT,
   order_struct_json TEXT,
   -- collector-cached shadow state under DEFAULT params; the report recomputes from ticks
-  t_shadow_ms          INTEGER,
-  t_shadow_snapshot_id INTEGER,
+  t_shadow_ms          BIGINT,
+  t_shadow_snapshot_id BIGINT,
   t_shadow_edge        TEXT,
-  t_shadow_degraded    INTEGER,
-  t_shadow_kyber_ms    INTEGER,
+  t_shadow_degraded    SMALLINT,
+  t_shadow_kyber_ms    BIGINT,
   t_shadow_kyber_edge  TEXT,
   max_edge_kyber       TEXT,
-  t_shadow_bebop_ms    INTEGER,
+  t_shadow_bebop_ms    BIGINT,
   t_shadow_bebop_edge  TEXT,
   max_edge_bebop       TEXT,
   max_edge             TEXT,
-  max_edge_ms          INTEGER,
+  max_edge_ms          BIGINT,
   -- outcome
   terminal_status   TEXT,
-  terminal_at_ms    INTEGER,
-  t_actual_ws_ms    INTEGER,
-  t_actual_chain_ms INTEGER,
+  terminal_at_ms    BIGINT,
+  t_actual_ws_ms    BIGINT,
+  t_actual_chain_ms BIGINT,
   filled_maker_total TEXT,
   filled_taker_total TEXT,
   status_json       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_orders_open ON orders(deadline_ms) WHERE terminal_status IS NULL;
 CREATE INDEX IF NOT EXISTS idx_orders_pair ON orders(pair);
+CREATE INDEX IF NOT EXISTS idx_orders_received ON orders(received_at_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_orders_terminal ON orders(terminal_at_ms DESC) WHERE terminal_status IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS fills (
   order_hash TEXT NOT NULL REFERENCES orders(order_hash),
@@ -95,43 +97,44 @@ CREATE TABLE IF NOT EXISTS fills (
   filled_maker_amount        TEXT,
   filled_auction_taker_amount TEXT,
   taker_fee_amount           TEXT,
-  block_number INTEGER,
-  block_ts_ms  INTEGER,
+  block_number BIGINT,
+  block_ts_ms  BIGINT,
   PRIMARY KEY (order_hash, tx_hash)
 );
 
 CREATE TABLE IF NOT EXISTS snapshots (
-  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  id        BIGSERIAL PRIMARY KEY,
   ticker    TEXT NOT NULL,
-  ts_ms     INTEGER NOT NULL,
+  ts_ms     BIGINT NOT NULL,
   fetch_ms  INTEGER,
   best_bid  TEXT,
   best_ask  TEXT,
   mid       TEXT,
   bid_depth_base TEXT,
   ask_depth_base TEXT,
-  levels_gz BLOB NOT NULL
+  levels_gz BYTEA NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_snapshots_ticker_ts ON snapshots(ticker, ts_ms);
+CREATE INDEX IF NOT EXISTS idx_snapshots_latest ON snapshots(ticker, id DESC);
 
 CREATE TABLE IF NOT EXISTS ref_prices (
   ticker TEXT NOT NULL,
-  ts_ms  INTEGER NOT NULL,
+  ts_ms  BIGINT NOT NULL,
   mid    TEXT NOT NULL,
   PRIMARY KEY (ticker, ts_ms)
 );
 
 CREATE TABLE IF NOT EXISTS ticks (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  id              BIGSERIAL PRIMARY KEY,
   order_hash      TEXT NOT NULL REFERENCES orders(order_hash),
-  ts_ms           INTEGER NOT NULL,
-  snapshot_id     INTEGER REFERENCES snapshots(id),
+  ts_ms           BIGINT NOT NULL,
+  snapshot_id     BIGINT REFERENCES snapshots(id),
   snapshot_age_ms INTEGER,
-  degraded        INTEGER NOT NULL,
-  exclusive       INTEGER NOT NULL DEFAULT 0,
+  degraded        SMALLINT NOT NULL,
+  exclusive       SMALLINT NOT NULL DEFAULT 0,
   remaining_maker TEXT NOT NULL,
   rate_bump       INTEGER,
-  insufficient_depth INTEGER NOT NULL DEFAULT 0,
+  insufficient_depth SMALLINT NOT NULL DEFAULT 0,
   hedge_proceeds  TEXT,
   auction_cost    TEXT NOT NULL,
   gas_cost_raw    TEXT NOT NULL,
@@ -146,31 +149,73 @@ CREATE TABLE IF NOT EXISTS ticks (
   kyber_out        TEXT,
   kyber_amount_in  TEXT,
   kyber_quote_age_ms INTEGER,
-  kyber_degraded   INTEGER,
+  kyber_degraded   SMALLINT,
   kyber_gas_cost   TEXT,
   kyber_fee        TEXT,
   edge_kyber       TEXT,
   bebop_out        TEXT,
   bebop_age_ms     INTEGER,
-  bebop_degraded   INTEGER,
+  bebop_degraded   SMALLINT,
   bebop_gas_cost   TEXT,
   bebop_fee        TEXT,
   edge_bebop       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ticks_order ON ticks(order_hash, ts_ms);
+CREATE INDEX IF NOT EXISTS idx_ticks_order_id ON ticks(order_hash, id DESC);
 
 CREATE TABLE IF NOT EXISTS gas_samples (
-  ts_ms         INTEGER PRIMARY KEY,
+  ts_ms         BIGINT PRIMARY KEY,
   gas_price_wei TEXT,
   base_fee_wei  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS events (
-  id     INTEGER PRIMARY KEY AUTOINCREMENT,
-  run_id INTEGER REFERENCES runs(id),
-  ts_ms  INTEGER NOT NULL,
+  id     BIGSERIAL PRIMARY KEY,
+  run_id BIGINT REFERENCES runs(id),
+  ts_ms  BIGINT NOT NULL,
   kind   TEXT NOT NULL,
   detail_json TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind);
+CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind, id DESC);
+CREATE INDEX IF NOT EXISTS idx_events_recent ON events(id DESC);
+
+-- Precomputed terminal-order verdicts. The SQLite dashboard re-classified every
+-- order's ticks on demand and leaned on a process-lifetime cache to make that
+-- affordable; a serverless reader has no such cache, so the collector writes the
+-- verdict once, when the order reaches a terminal state.
+CREATE TABLE IF NOT EXISTS decided_outcomes (
+  order_hash     TEXT PRIMARY KEY REFERENCES orders(order_hash),
+  terminal_at_ms BIGINT NOT NULL,
+  pair           TEXT,
+  maker_asset    TEXT NOT NULL,
+  taker_asset    TEXT NOT NULL,
+  size_usd       DOUBLE PRECISION,
+  outcome        TEXT NOT NULL,
+  lead_s         INTEGER,
+  any_win        SMALLINT NOT NULL DEFAULT 0,
+  computed_at_ms BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_decided_recent ON decided_outcomes(terminal_at_ms DESC);
+
+-- One row per (order, venue): lets the scoreboard aggregate in SQL instead of
+-- pulling every decided order into the reader.
+CREATE TABLE IF NOT EXISTS decided_venue_outcomes (
+  order_hash    TEXT NOT NULL REFERENCES decided_outcomes(order_hash) ON DELETE CASCADE,
+  venue         TEXT NOT NULL,
+  cls           TEXT NOT NULL,
+  margin_bps    DOUBLE PRECISION,
+  shortfall_bps DOUBLE PRECISION,
+  has_data      SMALLINT NOT NULL,
+  PRIMARY KEY (order_hash, venue)
+);
+CREATE INDEX IF NOT EXISTS idx_decided_venue ON decided_venue_outcomes(venue, cls);
+
+-- Resolved ERC-20 symbols. The SQLite dashboard cached these in module memory,
+-- which a serverless reader loses on every cold start; persisting keeps the
+-- unsupported-token table readable instead of a wall of address stubs.
+CREATE TABLE IF NOT EXISTS tokens (
+  address        TEXT PRIMARY KEY,
+  symbol         TEXT,
+  resolved_at_ms BIGINT NOT NULL
+);
 `;

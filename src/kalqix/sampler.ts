@@ -66,7 +66,9 @@ export class Sampler {
     try {
       const { book, receivedAtMs, fetchMs } = await this.fetchBook(this.ticker, config.bookDepth);
       if (this.stopped) return;
-      const id = this.db.insertSnapshot(
+      // Awaited: the snapshot id goes onto every tick that cites this book, so
+      // the row has to exist before pricing can reference it.
+      const id = await this.db.insertSnapshot(
         this.ticker,
         receivedAtMs,
         fetchMs,
@@ -77,6 +79,7 @@ export class Sampler {
         depthBase(book.asks),
         serializeBook(book)
       );
+      if (this.stopped) return;
       this.latest = { id, ticker: this.ticker, tsMs: receivedAtMs, book };
       this.sampleCount++;
       if (this.lastSuccessMs > 0 && receivedAtMs - this.lastSuccessMs > 2 * config.sampleIntervalMs) {

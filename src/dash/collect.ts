@@ -1,0 +1,308 @@
+/** Dashboard data collection, shared by the local server and the Vercel
+ *  function. Every figure is either a SQL aggregate or a bounded row set: a
+ *  serverless reader gets no process-lifetime cache to amortise a full scan, so
+ *  nothing here re-derives verdicts — the collector wrote them to
+ *  decided_outcomes when each order finished. */
+import { allChains, config, type ResolvedChain } from '../../config.js';
+import { Db } from '../db/db.js';
+import { schemaFor } from '../db/schema.js';
+import { fmtUnits, toFloat } from '../pricing/units.js';
+import type { Venue } from '../report/classify.js';
+
+const VENUES: Array<{ venue: Venue; name: string }> = [
+  { venue: 'kalqix', name: 'KalqiX order book' },
+  { venue: 'kyber', name: 'Kyber aggregator' },
+  { venue: 'bebop', name: 'Bebop market makers' },
+];
+
+interface Chip {
+  kind: 'win' | 'late' | 'short' | 'thin' | 'none';
+  text: string;
+}
+
+function decidedChip(v: {
+  cls: string;
+  margin_bps: number | null;
+  shortfall_bps: number | null;
+  has_data: number;
+}): Chip {
+  if (v.has_data !== 1) return { kind: 'none', text: 'no data' };
+  switch (v.cls) {
+    case 'WIN':
+      return { kind: 'win', text: `won +${v.margin_bps?.toFixed(1)} bps` };
+    case 'WIN_DEGRADED':
+      return { kind: 'win', text: `won* +${v.margin_bps?.toFixed(1)} bps` };
+    case 'LOSE_SPEED':
+      return { kind: 'late', text: 'profitable too late' };
+    case 'LOSE_PRICE':
+      return { kind: 'short', text: `${v.shortfall_bps?.toFixed(1)} bps short` };
+    case 'NO_DEPTH':
+      return { kind: 'thin', text: 'book too thin' };
+    case 'UNFILLABLE':
+      return { kind: 'none', text: 'unfillable' };
+    default:
+      return { kind: 'none', text: 'no data' };
+  }
+}
+
+function liveChip(edge: string | null, notionalTaker: string | null, degraded: boolean): Chip {
+  if (edge === null || notionalTaker === null || BigInt(notionalTaker) === 0n) {
+    return { kind: 'none', text: 'no data' };
+  }
+  const bps = Number((BigInt(edge) * 1_000_000n) / BigInt(notionalTaker)) / 100;
+  const star = degraded ? '*' : '';
+  return bps > 0
+    ? { kind: 'win', text: `+${bps.toFixed(1)} bps${star}` }
+    : { kind: 'short', text: `${bps.toFixed(1)} bps${star}` };
+}
+
+const NO_MARKET: Chip = { kind: 'none', text: 'no market' };
+
+async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string, unknown>> {
+  const symbols = new Map((await db.tokens()).map((t) => [t.address.toLowerCase(), t.symbol]));
+  const tokenLabel = (address: string): string =>
+    symbols.get(address.toLowerCase()) ?? address.slice(0, 8) + '..';
+  const pairLabel = (o: Record<string, any>): string =>
+    o.pair ? o.pair.replace('_', '/') : `${tokenLabel(o.maker_asset)} > ${tokenLabel(o.taker_asset)}`;
+
+  const run = await db.get(`SELECT * FROM runs ORDER BY id DESC LIMIT 1`);
+  const runs = (await db.all(`SELECT started_at_ms, ended_at_ms FROM runs`)) as Array<{
+    started_at_ms: number;
+    ended_at_ms: number | null;
+  }>;
+  let activeMs = 0;
+  for (const r of runs) activeMs += Math.max(0, (r.ended_at_ms ?? Date.now()) - r.started_at_ms);
+
+  // --- venue scoreboard, aggregated in the database ---
+  // Note: these medians interpolate between the two middle values (percentile_cont).
+  // The SQLite dashboard took the lower of the two.
+  const venueRows = (await db.all(
+    `SELECT venue,
+            COUNT(*) FILTER (WHERE cls <> 'NO_TICKS') AS decided,
+            COUNT(*) FILTER (WHERE cls = 'WIN') AS wins,
+            COUNT(*) FILTER (WHERE cls IN ('LOSE_SPEED','LOSE_PRICE')) AS losses,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY margin_bps)
+              FILTER (WHERE cls = 'WIN' AND margin_bps IS NOT NULL) AS median_win_bps,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY shortfall_bps)
+              FILTER (WHERE cls = 'LOSE_PRICE' AND shortfall_bps IS NOT NULL) AS median_miss_bps
+     FROM decided_venue_outcomes WHERE has_data = 1 GROUP BY venue`
+  )) as Array<Record<string, any>>;
+  const byVenue = new Map(venueRows.map((r) => [r.venue, r]));
+  const venues = VENUES.map(({ venue, name }) => {
+    const r = byVenue.get(venue);
+    const decided = r?.decided ?? 0;
+    const wins = r?.wins ?? 0;
+    const losses = r?.losses ?? 0;
+    return {
+      name,
+      decided,
+      wins,
+      losses,
+      thin: decided - wins - losses,
+      medianWinBps: r?.median_win_bps ?? null,
+      medianMissBps: r?.median_miss_bps ?? null,
+    };
+  });
+
+  // --- funnel ---
+  const counts = (await db.get(
+    `SELECT COUNT(*) AS seen,
+            COUNT(*) FILTER (WHERE eligible = 1 OR kyber_only = 1) AS hedgeable,
+            COALESCE(SUM(size_usd) FILTER (WHERE eligible = 1 OR kyber_only = 1), 0) AS hedgeable_usd
+     FROM orders`
+  )) as Record<string, any>;
+  const priced = (await db.get(
+    `SELECT COUNT(*) AS c FROM orders o WHERE (o.eligible = 1 OR o.kyber_only = 1)
+     AND EXISTS (SELECT 1 FROM ticks t WHERE t.order_hash = o.order_hash)`
+  )) as { c: number };
+  const won = (await db.get(
+    `SELECT COUNT(*) AS c, COALESCE(SUM(size_usd), 0) AS usd FROM decided_outcomes WHERE any_win = 1`
+  )) as { c: number; usd: number };
+
+  // --- live orders ---
+  const live = (
+    (await db.all(
+      `SELECT o.order_hash, o.pair, o.kyber_only, o.maker_asset, o.taker_asset,
+              o.auction_start_ms, o.auction_duration_s, o.deadline_ms,
+              t.edge_default, t.edge_kyber, t.edge_bebop, t.degraded, t.kyber_degraded, t.bebop_degraded,
+              t.insufficient_depth, t.notional_taker, t.notional_usdc
+       FROM orders o
+       LEFT JOIN ticks t ON t.id = (SELECT MAX(id) FROM ticks WHERE order_hash = o.order_hash)
+       WHERE (o.eligible = 1 OR o.kyber_only = 1) AND o.terminal_status IS NULL
+       ORDER BY o.received_at_ms DESC LIMIT 100`
+    )) as Array<Record<string, any>>
+  ).map((o) => {
+    const now = Date.now();
+    const durMs = (o.auction_duration_s ?? 0) * 1000;
+    const elapsed = o.auction_start_ms !== null ? now - o.auction_start_ms : 0;
+    const decayPct = durMs > 0 ? Math.min(100, Math.max(0, (100 * elapsed) / durMs)) : 0;
+    const kalqixChip: Chip =
+      o.insufficient_depth === 1
+        ? { kind: 'thin', text: 'book too thin' }
+        : liveChip(o.edge_default, o.notional_taker, o.degraded === 1);
+    return {
+      pair: pairLabel(o),
+      sizeUsd: o.notional_usdc !== null ? toFloat(BigInt(o.notional_usdc), 6) : null,
+      decayPct: Math.round(decayPct),
+      decayLabel: decayPct >= 100 ? 'at floor' : 'decaying',
+      kalqix: o.kyber_only === 1 ? NO_MARKET : kalqixChip,
+      kyber: liveChip(o.edge_kyber, o.notional_taker, o.kyber_degraded === 1),
+      bebop: liveChip(o.edge_bebop, o.notional_taker, o.bebop_degraded === 1),
+      expires: o.deadline_ms !== null ? `${Math.max(0, Math.round((o.deadline_ms - now) / 60000))} min` : '?',
+    };
+  });
+
+  // --- decided table: precomputed verdicts, latest 20 ---
+  const decidedRows = (await db.all(
+    `SELECT d.order_hash, d.terminal_at_ms, d.pair, d.maker_asset, d.taker_asset,
+            d.size_usd, d.outcome, d.lead_s,
+            v.venue, v.cls, v.margin_bps, v.shortfall_bps, v.has_data
+     FROM (SELECT * FROM decided_outcomes ORDER BY terminal_at_ms DESC LIMIT 20) d
+     LEFT JOIN decided_venue_outcomes v ON v.order_hash = d.order_hash
+     ORDER BY d.terminal_at_ms DESC`
+  )) as Array<Record<string, any>>;
+  const decidedByHash = new Map<string, Record<string, any>>();
+  for (const r of decidedRows) {
+    let entry = decidedByHash.get(r.order_hash);
+    if (!entry) {
+      entry = {
+        time: new Date(r.terminal_at_ms).toISOString().slice(11, 19),
+        pair: pairLabel(r),
+        sizeUsd: r.size_usd,
+        outcome: r.outcome === 'filled' ? 'filled by someone' : r.outcome,
+        lead: r.lead_s !== null ? `${r.lead_s}s earlier` : '',
+        kalqix: { kind: 'none', text: 'no data' } as Chip,
+        kyber: { kind: 'none', text: 'no data' } as Chip,
+        bebop: { kind: 'none', text: 'no data' } as Chip,
+      };
+      decidedByHash.set(r.order_hash, entry);
+    }
+    if (r.venue) entry[r.venue] = decidedChip(r as any);
+  }
+  const decided = [...decidedByHash.values()];
+
+  // --- ops drawer ---
+  const lastWs = (await db.get(
+    `SELECT kind FROM events WHERE kind IN ('ws_connected','ws_disconnected') ORDER BY id DESC LIMIT 1`
+  )) as { kind: string } | undefined;
+  const activity = (await db.get(
+    `SELECT (SELECT MAX(received_at_ms) FROM orders) AS last_order,
+            (SELECT MAX(ts_ms) FROM ticks) AS last_tick,
+            (SELECT COUNT(*) FROM ticks) AS ticks_total,
+            (SELECT COUNT(*) FROM decided_outcomes) AS decided_total`
+  )) as Record<string, any>;
+  const healthy =
+    run !== undefined &&
+    run.ended_at_ms === null &&
+    lastWs?.kind === 'ws_connected' &&
+    (activity.last_order === null ||
+      Date.now() - Math.max(activity.last_order, activity.last_tick ?? 0) < 20 * 60_000);
+
+  const books = [];
+  for (const p of chain.pairs) {
+    const snap = (await db.get(
+      `SELECT ts_ms, mid, bid_depth_base, ask_depth_base FROM snapshots WHERE ticker = ? ORDER BY id DESC LIMIT 1`,
+      [p.ticker]
+    )) as Record<string, any> | undefined;
+    const ref = (await db.get(`SELECT ts_ms, mid FROM ref_prices WHERE ticker = ? ORDER BY ts_ms DESC LIMIT 1`, [
+      p.ticker,
+    ])) as Record<string, any> | undefined;
+    const snapFresher = snap !== undefined && (ref === undefined || snap.ts_ms >= ref.ts_ms);
+    const src = snapFresher ? snap : ref;
+    books.push({
+      ticker: p.ticker,
+      mid: src ? `${fmtUnits(BigInt(src.mid), p.quote.decimals)} USDC` : null,
+      age: src ? `${Math.round((Date.now() - src.ts_ms) / 1000)}s` : '?',
+      bid: snapFresher ? `${fmtUnits(BigInt(snap!.bid_depth_base), p.base.decimals)} ${p.base.symbol}` : null,
+      ask: snapFresher ? `${fmtUnits(BigInt(snap!.ask_depth_base), p.base.decimals)} ${p.base.symbol}` : null,
+    });
+  }
+
+  const topUnsupported = (
+    (await db.all(
+      `SELECT asset, COUNT(*) AS c FROM (
+         SELECT maker_asset AS asset FROM orders WHERE eligible = 0 AND kyber_only = 0
+         UNION ALL SELECT taker_asset FROM orders WHERE eligible = 0 AND kyber_only = 0
+       ) AS assets GROUP BY asset ORDER BY c DESC LIMIT 8`
+    )) as Array<{ asset: string; c: number }>
+  ).map((r) => ({ token: tokenLabel(r.asset), orders: r.c }));
+
+  const events = (
+    (await db.all(`SELECT ts_ms, kind, detail_json FROM events ORDER BY id DESC LIMIT 10`)) as Array<
+      Record<string, any>
+    >
+  ).map((e) => ({
+    time: new Date(e.ts_ms).toISOString().slice(11, 19),
+    kind: e.kind,
+    detail: e.detail_json ? String(e.detail_json).slice(0, 90) : '',
+  }));
+
+  return {
+    key: chain.key,
+    label: chain.label,
+    chainId: chain.chainId,
+    observedHours: activeMs / 3_600_000,
+    ordersSeen: counts.seen,
+    healthy,
+    venues,
+    funnel: {
+      seen: counts.seen,
+      hedgeable: counts.hedgeable,
+      hedgeableUsd: Number(counts.hedgeable_usd),
+      priced: priced.c,
+      won: won.c,
+      wonUsd: Number(won.usd),
+    },
+    live,
+    decided,
+    ops: {
+      counters: [
+        ['run', `#${run?.id ?? '?'}`],
+        ['live now', String(live.length)],
+        ['pricing ticks', activity.ticks_total.toLocaleString('en-US')],
+        ['decided', String(activity.decided_total)],
+        ['clock skew', run?.clock_skew_ms != null ? `${run.clock_skew_ms}ms` : '?'],
+        [
+          'last order',
+          activity.last_order ? `${Math.round((Date.now() - activity.last_order) / 60000)}m ago` : 'never',
+        ],
+      ],
+      books,
+      topUnsupported,
+      events,
+    },
+  };
+}
+
+/** Chains whose Postgres schema exists, i.e. that a collector has run for. */
+async function liveChains(probe: Db): Promise<ResolvedChain[]> {
+  const rows = (await probe.all(
+    `SELECT schema_name FROM information_schema.schemata WHERE schema_name = ANY(?)`,
+    [allChains.map((c) => schemaFor(c.chainId))]
+  )) as Array<{ schema_name: string }>;
+  const present = new Set(rows.map((r) => r.schema_name));
+  return allChains.filter((c) => present.has(schemaFor(c.chainId)));
+}
+
+/** Connections are cached per module instance: a warm serverless instance
+ *  reuses them, a cold one pays a single connect. */
+const pools = new Map<number, Db>();
+
+async function dbFor(chainId: number): Promise<Db> {
+  let db = pools.get(chainId);
+  if (!db) {
+    db = await Db.open(chainId, { readonly: true, max: 1 });
+    pools.set(chainId, db);
+  }
+  return db;
+}
+
+export async function collectAll(): Promise<Record<string, unknown>> {
+  const probe = await dbFor(config.chainId);
+  const chains = await liveChains(probe);
+  const out: Record<string, unknown>[] = [];
+  for (const chain of chains) {
+    out.push(await collectChain(chain, await dbFor(chain.chainId)));
+  }
+  return { now: new Date().toISOString(), chains: out };
+}

@@ -10,6 +10,8 @@
     "collect": "tsx src/collector/main.ts",
     "report": "tsx src/report/main.ts",
     "dash": "tsx src/dash/main.ts",
+    "migrate": "tsx scripts/migrate.ts",
+    "import:sqlite": "tsx scripts/import-sqlite.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
     "smoke:kalqix": "tsx scripts/smoke-kalqix.ts",
@@ -17,17 +19,23 @@
     "smoke:auction": "tsx scripts/smoke-auction.ts",
     "smoke:ws": "tsx scripts/smoke-ws.ts",
     "smoke:rpc": "tsx scripts/smoke-rpc.ts",
-    "smoke:bebop": "tsx scripts/smoke-bebop.ts"
+    "smoke:bebop": "tsx scripts/smoke-bebop.ts",
+    "build:static": "tsx scripts/build-static.ts",
+    "backfill:outcomes": "tsx scripts/backfill-outcomes.ts"
   },
   "dependencies": {
     "@1inch/fusion-sdk": "^2.4.10",
     "axios": "^1.18.1",
-    "better-sqlite3": "^11.10.0",
+    "pg": "^8.13.1",
     "ws": "^8.21.0"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.10.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.19.0",
+    "@types/pg": "^8.11.10",
     "@types/ws": "^8.18.1",
     "tsx": "^4.20.0",
     "typescript": "^5.5.4"

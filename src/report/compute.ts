@@ -1,4 +1,4 @@
-import type { Database } from 'better-sqlite3';
+import type { Db } from '../db/db.js';
 import { config } from '../../config.js';
 import {
   classify,
@@ -152,11 +152,15 @@ function nearestMid(series: RefPriceSeries | undefined, tsMs: number): bigint | 
   return series.mid[best]!;
 }
 
-export function computeReport(db: Database): ReportData {
+/** Orders per round trip when loading ticks. Bounds both the number of queries
+ *  and how many ticks are resident at once. */
+const TICK_CHUNK = 400;
+
+export async function computeReport(db: Db): Promise<ReportData> {
   // --- runs / observed span ---
-  const runRows = db
-    .prepare(`SELECT id, started_at_ms, ended_at_ms, clean_shutdown, clock_skew_ms, config_json FROM runs ORDER BY id`)
-    .all() as Array<{
+  const runRows = (await db.all(
+    `SELECT id, started_at_ms, ended_at_ms, clean_shutdown, clock_skew_ms, config_json FROM runs ORDER BY id`
+  )) as Array<{
     id: number;
     started_at_ms: number;
     ended_at_ms: number | null;
@@ -164,27 +168,26 @@ export function computeReport(db: Database): ReportData {
     clock_skew_ms: number | null;
     config_json: string;
   }>;
+
   // Observed time = sum of per-run spans. A run with no ended_at_ms was killed
   // uncleanly (network blip / hard kill); end it at its OWN last recorded
   // activity, bounded by the next run's start, NOT the global last tick (which
   // would credit an abandoned early run all the way to the end of collection).
-  const lastActivityInWindow = db.prepare(
-    `SELECT MAX(t) AS ts FROM (
+  const LAST_ACTIVITY_SQL = `SELECT MAX(t) AS ts FROM (
        SELECT MAX(ts_ms) t FROM ticks WHERE ts_ms >= ? AND ts_ms < ?
        UNION ALL SELECT MAX(received_at_ms) FROM orders WHERE received_at_ms >= ? AND received_at_ms < ?
        UNION ALL SELECT MAX(ts_ms) FROM events WHERE ts_ms >= ? AND ts_ms < ?
-     )`
-  );
+     ) AS activity`;
   let activeMs = 0;
   for (let i = 0; i < runRows.length; i++) {
     const r = runRows[i]!;
     const cap = runRows[i + 1]?.started_at_ms ?? Date.now();
     let end = r.ended_at_ms;
     if (end === null) {
-      const row = lastActivityInWindow.get(
-        r.started_at_ms, cap, r.started_at_ms, cap, r.started_at_ms, cap
-      ) as { ts: number | null };
-      end = row.ts ?? r.started_at_ms;
+      const row = await db.get<{ ts: number | null }>(LAST_ACTIVITY_SQL, [
+        r.started_at_ms, cap, r.started_at_ms, cap, r.started_at_ms, cap,
+      ]);
+      end = row?.ts ?? r.started_at_ms;
     }
     activeMs += Math.max(0, end - r.started_at_ms);
   }
@@ -196,9 +199,9 @@ export function computeReport(db: Database): ReportData {
   // --- ref prices for USD conversion ---
   const refSeries = new Map<string, RefPriceSeries>();
   for (const pair of config.pairs) {
-    const rows = db
-      .prepare(`SELECT ts_ms, mid FROM ref_prices WHERE ticker = ? ORDER BY ts_ms`)
-      .all(pair.ticker) as Array<{ ts_ms: number; mid: string }>;
+    const rows = (await db.all(`SELECT ts_ms, mid FROM ref_prices WHERE ticker = ? ORDER BY ts_ms`, [
+      pair.ticker,
+    ])) as Array<{ ts_ms: number; mid: string }>;
     refSeries.set(pair.ticker, { ts: rows.map((r) => r.ts_ms), mid: rows.map((r) => BigInt(r.mid)) });
   }
 
@@ -218,14 +221,14 @@ export function computeReport(db: Database): ReportData {
   }
 
   // --- orders + ticks -> classification under default and sensitivity params ---
-  const orderRows = db.prepare(`SELECT * FROM orders ORDER BY received_at_ms`).all() as Record<string, any>[];
-  const tickStmt = db.prepare(
-    `SELECT ts_ms, degraded, exclusive, insufficient_depth, hedge_proceeds, auction_cost,
+  const orderRows = (await db.all(`SELECT * FROM orders ORDER BY received_at_ms`)) as Record<string, any>[];
+  // One query per TICK_CHUNK orders rather than per order: against a remote
+  // database the per-order form spent all its time in round trips.
+  const TICKS_SQL = `SELECT order_hash, ts_ms, degraded, exclusive, insufficient_depth, hedge_proceeds, auction_cost,
             gas_cost_raw, fee_cost, notional_taker, notional_usdc,
             kyber_out, kyber_degraded, kyber_gas_cost, kyber_fee,
             bebop_out, bebop_degraded, bebop_gas_cost, bebop_fee
-     FROM ticks WHERE order_hash = ? ORDER BY ts_ms`
-  );
+     FROM ticks WHERE order_hash = ANY(?) ORDER BY order_hash, ts_ms`;
 
   const defaultParams: ClassifyParams = {
     safetyMarginBps: config.safetyMarginBps,
@@ -250,7 +253,28 @@ export function computeReport(db: Database): ReportData {
   let kyberCoveredTicks = 0;
   let bebopCoveredTicks = 0;
 
-  for (const row of orderRows) {
+  // Ticks are loaded a chunk of orders ahead of the cursor and dropped as it
+  // moves on, so only one chunk is resident at a time.
+  const ticksByHash = new Map<string, Record<string, any>[]>();
+  let prefetchedThrough = 0;
+  const prefetchTicks = async (from: number): Promise<void> => {
+    if (from < prefetchedThrough) return;
+    ticksByHash.clear();
+    const chunk = orderRows.slice(from, from + TICK_CHUNK);
+    const wanted = chunk.filter((r) => r.eligible === 1 || r.kyber_only === 1).map((r) => r.order_hash);
+    if (wanted.length > 0) {
+      for (const t of await db.all(TICKS_SQL, [wanted])) {
+        const list = ticksByHash.get(t.order_hash);
+        if (list) list.push(t);
+        else ticksByHash.set(t.order_hash, [t]);
+      }
+    }
+    prefetchedThrough = from + TICK_CHUNK;
+  };
+
+  for (let orderIdx = 0; orderIdx < orderRows.length; orderIdx++) {
+    const row = orderRows[orderIdx]!;
+    await prefetchTicks(orderIdx);
     const order: OrderData = {
       orderHash: row.order_hash,
       eligible: row.eligible === 1,
@@ -265,7 +289,7 @@ export function computeReport(db: Database): ReportData {
     let kyberTicks: TickData[] = [];
     let bebopTicks: TickData[] = [];
     if (order.eligible || kyberOnly) {
-      const raw = tickStmt.all(row.order_hash) as Record<string, any>[];
+      const raw = ticksByHash.get(row.order_hash) ?? [];
       ticks = raw.map((t) => tickForVenue(t, 'kalqix'));
       kyberTicks = raw.map((t) => tickForVenue(t, 'kyber'));
       bebopTicks = raw.map((t) => tickForVenue(t, 'bebop'));
@@ -412,9 +436,10 @@ export function computeReport(db: Database): ReportData {
   // depth ceiling per pair from snapshot derived columns
   const depthCeiling: ReportData['depthCeiling'] = {};
   for (const pair of config.pairs) {
-    const rows = db
-      .prepare(`SELECT mid, bid_depth_base, ask_depth_base FROM snapshots WHERE ticker = ? AND mid IS NOT NULL`)
-      .all(pair.ticker) as Array<{ mid: string; bid_depth_base: string; ask_depth_base: string }>;
+    const rows = (await db.all(
+      `SELECT mid, bid_depth_base, ask_depth_base FROM snapshots WHERE ticker = ? AND mid IS NOT NULL`,
+      [pair.ticker]
+    )) as Array<{ mid: string; bid_depth_base: string; ask_depth_base: string }>;
     if (rows.length === 0) continue;
     const bidUsd: number[] = [];
     const askUsd: number[] = [];
@@ -472,9 +497,18 @@ export function computeReport(db: Database): ReportData {
   }
 
   // --- data quality ---
-  const eventCount = (kind: string): number =>
-    (db.prepare(`SELECT COUNT(*) AS c FROM events WHERE kind = ?`).get(kind) as { c: number }).c;
-  const wsGaps = db.prepare(`SELECT detail_json FROM events WHERE kind = 'ws_gap'`).all() as Array<{ detail_json: string }>;
+  const eventCounts = new Map<string, number>(
+    (
+      (await db.all(`SELECT kind, COUNT(*) AS c FROM events GROUP BY kind`)) as Array<{
+        kind: string;
+        c: number;
+      }>
+    ).map((r) => [r.kind, r.c])
+  );
+  const eventCount = (kind: string): number => eventCounts.get(kind) ?? 0;
+  const wsGaps = (await db.all(
+    `SELECT detail_json FROM events WHERE kind = 'ws_gap'`
+  )) as Array<{ detail_json: string }>;
   let wsDowntimeMs = 0;
   for (const g of wsGaps) {
     try {

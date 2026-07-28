@@ -1,6 +1,7 @@
 import type { OrderStatusResponse } from '@1inch/fusion-sdk';
 import { config, isKyberOnlySkipped } from '../../config.js';
 import type { Db } from '../db/db.js';
+import { buildDecidedOutcome, OUTCOME_ORDER_SQL, OUTCOME_TICK_SQL } from '../report/outcome.js';
 import type { FusionClient, ActiveOrder } from '../fusion/client.js';
 import type { PricingEngine } from '../pricing/engine.js';
 import type { RefPriceLoop } from '../kalqix/sampler.js';
@@ -13,6 +14,7 @@ import { log, logError } from '../log.js';
 
 const TERMINAL_RETRY_MS = 10_000;
 const TERMINAL_MAX_ATTEMPTS = 3;
+
 
 /** Order state machine: created -> live (engine) -> pending-terminal -> terminal.
  *  Terminal-status fetches go through the shared 1inch rate limiter. */
@@ -50,21 +52,21 @@ export class Lifecycle {
   }
 
   /** Shared entry for WS order_created, boot sweep, and poll fallback. */
-  handleOrderCreated(
+  async handleOrderCreated(
     payload: OrderCreatedPayload | ActiveOrder,
     receivedAtMs: number,
     source: 'ws' | 'sweep' | 'poll',
     lateSeen: boolean
-  ): void {
+  ): Promise<void> {
     const { order, orderHash, extension } = payload;
-    if (this.db.orderExists(orderHash)) return; // duplicate after reconnect/sweep
+    if (await this.db.orderExists(orderHash)) return; // duplicate after reconnect/sweep
 
     const eligibility = classifyOrder(order.makerAsset, order.takerAsset);
     if (!eligibility) {
       // No KalqiX market. Sizeable orders still get Kyber-only shadow pricing
       // when a quoter slot is free; the rest are recorded for volume only.
-      if (this.tryRegisterKyberOnly(payload, receivedAtMs, source, lateSeen)) return;
-      this.db.insertOrder({
+      if (await this.tryRegisterKyberOnly(payload, receivedAtMs, source, lateSeen)) return;
+      await this.db.insertOrder({
         orderHash,
         runId: this.runId(),
         receivedAtMs,
@@ -82,6 +84,12 @@ export class Lifecycle {
         eligible: false,
         kyberOnly: false,
         skipReason: 'unsupported_pair',
+        sizeUsd: this.estimateUsd(
+          order.makerAsset,
+          order.takerAsset,
+          BigInt(order.makingAmount),
+          BigInt(order.takingAmount)
+        ),
         auctionStartMs: null,
         auctionDurationS: null,
         initialRateBump: null,
@@ -105,17 +113,17 @@ export class Lifecycle {
       void this.decodeFallback(payload, receivedAtMs, source, lateSeen);
       return;
     }
-    this.registerDecoded(payload, decoded, receivedAtMs, source, lateSeen);
+    await this.registerDecoded(payload, decoded, receivedAtMs, source, lateSeen);
   }
 
   /** KalqiX-unsupported order: track via Kyber alone when sizeable enough and a
    *  quoter slot is free. Returns true when it was registered that way. */
-  private tryRegisterKyberOnly(
+  private async tryRegisterKyberOnly(
     payload: OrderCreatedPayload | ActiveOrder,
     receivedAtMs: number,
     source: 'ws' | 'sweep' | 'poll',
     lateSeen: boolean
-  ): boolean {
+  ): Promise<boolean> {
     const { order, orderHash, extension } = payload;
     if (isKyberOnlySkipped(order.makerAsset, order.takerAsset)) return false;
     const usd = this.estimateUsd(
@@ -153,7 +161,10 @@ export class Lifecycle {
     });
     if (!registered) return false; // no quoter slot free
 
-    this.db.insertOrder({
+    // Registration has to come first (it can fail on a full quoter), so the row
+    // lands just after. The engine's first tick is a second away and this insert
+    // resolves in milliseconds, so the tick's FK finds its order.
+    await this.db.insertOrder({
       orderHash,
       runId: this.runId(),
       receivedAtMs,
@@ -171,6 +182,7 @@ export class Lifecycle {
       eligible: false,
       kyberOnly: true,
       skipReason: 'unsupported_pair',
+      sizeUsd: usd,
       auctionStartMs: decoded.auctionStartMs,
       auctionDurationS: decoded.auctionDurationS,
       initialRateBump: decoded.initialRateBump,
@@ -198,23 +210,23 @@ export class Lifecycle {
     try {
       const status = await this.client.getOrderStatus(orderHash);
       const decoded = decodeOrder(status.order, status.extension);
-      this.registerDecoded(payload, decoded, receivedAtMs, source, lateSeen);
+      await this.registerDecoded(payload, decoded, receivedAtMs, source, lateSeen);
     } catch (err) {
       logError(`decode fallback failed for ${orderHash}, skipping`, err);
-      this.insertSkipError(payload, receivedAtMs, source, lateSeen, 'decode_error');
+      await this.insertSkipError(payload, receivedAtMs, source, lateSeen, 'decode_error');
       this.db.event(this.runId(), 'error_skip', { orderHash, reason: 'decode_error' });
     }
   }
 
-  private insertSkipError(
+  private async insertSkipError(
     payload: OrderCreatedPayload | ActiveOrder,
     receivedAtMs: number,
     source: 'ws' | 'sweep' | 'poll',
     lateSeen: boolean,
     reason: string
-  ): void {
+  ): Promise<void> {
     const { order } = payload;
-    this.db.insertOrder({
+    await this.db.insertOrder({
       orderHash: payload.orderHash,
       runId: this.runId(),
       receivedAtMs,
@@ -232,6 +244,12 @@ export class Lifecycle {
       eligible: false,
       kyberOnly: false,
       skipReason: reason,
+      sizeUsd: this.estimateUsd(
+        order.makerAsset,
+        order.takerAsset,
+        BigInt(order.makingAmount),
+        BigInt(order.takingAmount)
+      ),
       auctionStartMs: null,
       auctionDurationS: null,
       initialRateBump: null,
@@ -246,18 +264,20 @@ export class Lifecycle {
     });
   }
 
-  private registerDecoded(
+  private async registerDecoded(
     payload: OrderCreatedPayload | ActiveOrder,
     decoded: DecodedOrder,
     receivedAtMs: number,
     source: 'ws' | 'sweep' | 'poll',
     lateSeen: boolean
-  ): void {
+  ): Promise<void> {
     const { order, orderHash, extension } = payload;
     const eligibility = classifyOrder(order.makerAsset, order.takerAsset)!;
     const remaining = BigInt(payload.remainingMakerAmount);
 
-    this.db.insertOrder({
+    // Awaited before the engine can start ticking, so every tick's foreign key
+    // finds its order row.
+    await this.db.insertOrder({
       orderHash,
       runId: this.runId(),
       receivedAtMs,
@@ -275,6 +295,12 @@ export class Lifecycle {
       eligible: true,
       kyberOnly: false,
       skipReason: null,
+      sizeUsd: this.estimateUsd(
+        order.makerAsset,
+        order.takerAsset,
+        BigInt(order.makingAmount),
+        BigInt(order.takingAmount)
+      ),
       auctionStartMs: decoded.auctionStartMs,
       auctionDurationS: decoded.auctionDurationS,
       initialRateBump: decoded.initialRateBump,
@@ -375,33 +401,33 @@ export class Lifecycle {
     }
   }
 
-  handleFilled(orderHash: string, tsMs: number): void {
-    if (!this.tracked(orderHash)) return;
+  async handleFilled(orderHash: string, tsMs: number): Promise<void> {
+    if (!(await this.tracked(orderHash))) return;
     this.db.setActualWsTime(orderHash, tsMs);
     this.engine.unregister(orderHash);
     this.queueTerminalFetch(orderHash);
   }
 
-  handleFilledPartially(orderHash: string, remainingMakerAmount: string, tsMs: number): void {
-    if (!this.tracked(orderHash)) return;
+  async handleFilledPartially(orderHash: string, remainingMakerAmount: string, tsMs: number): Promise<void> {
+    if (!(await this.tracked(orderHash))) return;
     this.db.setActualWsTime(orderHash, tsMs); // first fill time
     const remaining = BigInt(remainingMakerAmount);
     this.db.updateRemaining(orderHash, remaining);
     this.engine.updateRemaining(orderHash, remaining);
   }
 
-  handleCancelled(orderHash: string): void {
-    if (!this.tracked(orderHash)) return;
+  async handleCancelled(orderHash: string): Promise<void> {
+    if (!(await this.tracked(orderHash))) return;
     this.engine.unregister(orderHash);
     this.queueTerminalFetch(orderHash);
   }
 
-  handleInvalid(orderHash: string): void {
-    this.handleCancelled(orderHash);
+  async handleInvalid(orderHash: string): Promise<void> {
+    await this.handleCancelled(orderHash);
   }
 
-  handleBalanceChange(orderHash: string, remainingMakerAmount: string): void {
-    if (!this.tracked(orderHash)) return;
+  async handleBalanceChange(orderHash: string, remainingMakerAmount: string): Promise<void> {
+    if (!(await this.tracked(orderHash))) return;
     const remaining = BigInt(remainingMakerAmount);
     this.db.updateRemaining(orderHash, remaining);
     this.engine.updateRemaining(orderHash, remaining);
@@ -410,13 +436,12 @@ export class Lifecycle {
   /** Only react to events for tracked, still-open orders (the WS feed is
    *  chain-wide; untracked unsupported orders must not consume 1inch budget).
    *  Kyber-only orders count: they need fill times for their verdicts. */
-  private tracked(orderHash: string): boolean {
+  private async tracked(orderHash: string): Promise<boolean> {
     if (this.engine.has(orderHash)) return true;
-    const row = this.db.raw
-      .prepare(
-        `SELECT 1 FROM orders WHERE order_hash = ? AND (eligible = 1 OR kyber_only = 1) AND terminal_status IS NULL`
-      )
-      .get(orderHash);
+    const row = await this.db.get(
+      `SELECT 1 FROM orders WHERE order_hash = ? AND (eligible = 1 OR kyber_only = 1) AND terminal_status IS NULL`,
+      [orderHash]
+    );
     return row !== undefined;
   }
 
@@ -472,14 +497,32 @@ export class Lifecycle {
       }
     }
     if (earliest !== null) this.db.setActualChainTime(orderHash, earliest);
+
+    // Verdict last, so it sees the chain-refined fill time.
+    await this.recordDecidedOutcome(orderHash);
+  }
+
+  /** Classify the finished order once and store the verdict. The dashboard used
+   *  to do this per request and cache it in process memory, which a serverless
+   *  reader cannot keep; doing it here means the reader only ever SELECTs. */
+  private async recordDecidedOutcome(orderHash: string): Promise<void> {
+    try {
+      const row = await this.db.get(OUTCOME_ORDER_SQL, [orderHash]);
+      if (!row || row.terminal_status === null) return;
+      const raw = await this.db.all(OUTCOME_TICK_SQL, [orderHash]);
+      this.db.upsertDecidedOutcome(buildDecidedOutcome(row, raw));
+    } catch (err) {
+      logError(`decided-outcome precompute failed for ${orderHash}`, err);
+    }
   }
 
   /** Orders past deadline + grace with no terminal event: fetch status directly. */
-  reapExpired(nowMs: number, graceMs: number): void {
+  async reapExpired(nowMs: number, graceMs: number): Promise<void> {
     for (const orderHash of this.engine.liveHashes()) {
-      const row = this.db.raw
-        .prepare(`SELECT deadline_ms FROM orders WHERE order_hash = ?`)
-        .get(orderHash) as { deadline_ms: number | null } | undefined;
+      const row = await this.db.get<{ deadline_ms: number | null }>(
+        `SELECT deadline_ms FROM orders WHERE order_hash = ?`,
+        [orderHash]
+      );
       const deadline = row?.deadline_ms;
       if (deadline !== null && deadline !== undefined && nowMs > deadline + graceMs) {
         log(`reaping expired ${orderHash}`);

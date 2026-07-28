@@ -22,7 +22,6 @@ interface ChainProfile {
   pairs: PairConfig[];
   rpcEnvVar: string;
   rpcUrlDefault: string;
-  dbPathDefault: string;
   dashPortDefault: number;
   /** KyberSwap aggregator chain slug */
   kyberChainSlug: string;
@@ -61,7 +60,6 @@ const profiles: Record<string, ChainProfile> = {
     ],
     rpcEnvVar: 'BASE_RPC_URL',
     rpcUrlDefault: 'https://mainnet.base.org',
-    dbPathDefault: './shadow.sqlite',
     dashPortDefault: 8787,
     kyberChainSlug: 'base',
     // USDbC<->USDC rotation: measured at ~17 bps underwater after fees, and it
@@ -88,7 +86,6 @@ const profiles: Record<string, ChainProfile> = {
     ],
     rpcEnvVar: 'ETH_RPC_URL',
     rpcUrlDefault: 'https://ethereum-rpc.publicnode.com',
-    dbPathDefault: './shadow-eth.sqlite',
     dashPortDefault: 8788,
     kyberChainSlug: 'ethereum',
     kyberOnlySkipPairs: [],
@@ -138,7 +135,6 @@ export const config = {
   oneInchWsBase: 'https://api.1inch.dev/fusion/ws',
   kalqixApiBase: 'https://api.kalqix.com/v1',
   baseRpcUrl: process.env[profile.rpcEnvVar] || profile.rpcUrlDefault,
-  dbPath: process.env.DB_PATH || profile.dbPathDefault,
   reportCurrency: 'USDC',
   /** Half the Dev Portal ~1 rps budget: two per-chain collectors share one API key. */
   restRatePerSec: 0.5,
@@ -202,7 +198,6 @@ export interface ResolvedChain {
   wethAddress: string;
   pairs: PairConfig[];
   rpcUrl: string;
-  dbPath: string;
 }
 
 export const allChains: ResolvedChain[] = ['base', 'ethereum'].map((key) => {
@@ -214,7 +209,6 @@ export const allChains: ResolvedChain[] = ['base', 'ethereum'].map((key) => {
     wethAddress: p.wethAddress,
     pairs: p.pairs,
     rpcUrl: process.env[p.rpcEnvVar] || p.rpcUrlDefault,
-    dbPath: p.dbPathDefault,
   };
 });
 

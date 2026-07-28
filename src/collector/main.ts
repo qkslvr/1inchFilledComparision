@@ -10,19 +10,20 @@ import { PricingEngine } from '../pricing/engine.js';
 import { KyberQuoter } from '../kyber/quoter.js';
 import { BebopFeed } from '../bebop/feed.js';
 import { Lifecycle } from './lifecycle.js';
+import { TokenResolver } from './tokens-job.js';
 import { log, logError } from '../log.js';
 
 const SDK_VERSION = '2.4.10';
 
 const client = new FusionClient(); // fails fast if ONEINCH_API_KEY is missing
-const db = new Db(config.dbPath);
+const db = await Db.open(config.chainId); // creates/migrates this chain's schema
 
-const runId = db.startRun(
+const runId = await db.startRun(
   JSON.stringify(config, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)),
   process.version,
   SDK_VERSION
 );
-log(`run ${runId} starting on ${config.chainLabel} (chain ${config.chainId}), db ${config.dbPath}`);
+log(`run ${runId} starting on ${config.chainLabel} (chain ${config.chainId}), schema chain_${config.chainId}`);
 
 // --- clock skew (Date header of first REST response) ---
 let skewMs = 0;
@@ -68,7 +69,9 @@ const kyber = new KyberQuoter(() => db.event(runId, 'kyber_429', {}));
 const bebop = new BebopFeed((kind) => db.event(runId, kind, {}));
 const engine = new PricingEngine(db, samplers, refPrices, gas, () => skewMs, () => runId, takerFeePpm, kyber, bebop);
 const lifecycle = new Lifecycle(db, client, engine, () => runId, refPrices);
+const tokenResolver = new TokenResolver(db, config.baseRpcUrl);
 
+tokenResolver.start();
 await gas.start();
 await refPrices.start();
 kyber.start();
@@ -76,9 +79,9 @@ await bebop.start();
 engine.start();
 
 // --- boot recovery: resume non-terminal orders from previous runs ---
-const openRows = db.openOrders();
+const openRows = await db.openOrders();
 if (openRows.length > 0) {
-  const lastEventTs = db.lastRunEventTs();
+  const lastEventTs = await db.lastRunEventTs();
   db.event(runId, 'ws_gap', { fromMs: lastEventTs, toMs: Date.now(), reason: 'restart' });
   let resumed = 0;
   for (const row of openRows) {
@@ -104,7 +107,7 @@ async function pollActiveOrders(): Promise<void> {
     const active = await client.getAllActiveOrders(3);
     const activeHashes = new Set(active.map((o) => o.orderHash));
     for (const o of active) {
-      lifecycle.handleOrderCreated(o, Date.now(), 'poll', true);
+      await lifecycle.handleOrderCreated(o, Date.now(), 'poll', true);
     }
     // Live orders that vanished from the active list reached a terminal state
     // while the socket was down; we have no WS fill time for them.
@@ -136,12 +139,12 @@ function stopPollFallback(): void {
 }
 
 const feed = new FusionFeed({
-  onOrderCreated: (p, ts) => lifecycle.handleOrderCreated(p, ts, 'ws', false),
-  onOrderFilled: (h, ts) => lifecycle.handleFilled(h, ts),
-  onOrderFilledPartially: (h, rem, ts) => lifecycle.handleFilledPartially(h, rem, ts),
-  onOrderCancelled: (h) => lifecycle.handleCancelled(h),
-  onOrderInvalid: (h) => lifecycle.handleInvalid(h),
-  onBalanceChange: (h, rem) => lifecycle.handleBalanceChange(h, rem),
+  onOrderCreated: (p, ts) => void lifecycle.handleOrderCreated(p, ts, 'ws', false),
+  onOrderFilled: (h, ts) => void lifecycle.handleFilled(h, ts),
+  onOrderFilledPartially: (h, rem, ts) => void lifecycle.handleFilledPartially(h, rem, ts),
+  onOrderCancelled: (h) => void lifecycle.handleCancelled(h),
+  onOrderInvalid: (h) => void lifecycle.handleInvalid(h),
+  onBalanceChange: (h, rem) => void lifecycle.handleBalanceChange(h, rem),
   onStateChange: (connected) => {
     if (connected) {
       db.event(runId, 'ws_connected', {});
@@ -168,8 +171,8 @@ setTimeout(() => {
       const active = await client.getAllActiveOrders();
       let added = 0;
       for (const o of active) {
-        if (!db.orderExists(o.orderHash)) {
-          lifecycle.handleOrderCreated(o, Date.now(), 'sweep', true);
+        if (!(await db.orderExists(o.orderHash))) {
+          await lifecycle.handleOrderCreated(o, Date.now(), 'sweep', true);
           added++;
         }
       }
@@ -182,7 +185,7 @@ setTimeout(() => {
 }, 2000);
 
 // --- expiry reaper ---
-const reaper = setInterval(() => lifecycle.reapExpired(Date.now(), config.reapGraceMs), 30_000);
+const reaper = setInterval(() => void lifecycle.reapExpired(Date.now(), config.reapGraceMs), 30_000);
 
 // --- status line ---
 let lastTickCount = 0;
@@ -215,6 +218,7 @@ process.on('SIGINT', () => {
   engine.stop();
   kyber.stop();
   bebop.stop();
+  tokenResolver.stop();
   lifecycle.stop();
   stopPollFallback();
   clearInterval(reaper);
@@ -222,13 +226,14 @@ process.on('SIGINT', () => {
   for (const s of samplers.values()) s.stop();
   refPrices.stop();
   gas.stop();
-  // small delay lets in-flight synchronous writes settle
+  // small delay lets in-flight writes reach the queue before it is drained
   setTimeout(() => {
-    db.endRun(runId, true);
-    db.checkpoint();
-    db.close();
-    log('shutdown complete');
-    process.exit(0);
+    void (async () => {
+      db.endRun(runId, true);
+      await db.close(); // flushes the pending write batch
+      log(`shutdown complete${db.writeErrors > 0 ? ` (${db.writeErrors} writes dropped)` : ''}`);
+      process.exit(0);
+    })();
   }, 500);
 });
 process.on('SIGTERM', () => process.emit('SIGINT'));

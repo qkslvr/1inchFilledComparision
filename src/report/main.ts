@@ -1,20 +1,13 @@
-import { writeFileSync, existsSync } from 'node:fs';
-import Database from 'better-sqlite3';
+import { writeFileSync } from 'node:fs';
 import { config } from '../../config.js';
-import { ensureMigrated } from '../db/db.js';
+import { Db } from '../db/db.js';
 import { computeReport } from './compute.js';
 import { renderMarkdown } from './render.js';
 import { log } from '../log.js';
 
-if (!existsSync(config.dbPath)) {
-  console.error(`database not found at ${config.dbPath}; run the collector first`);
-  process.exit(1);
-}
-
-ensureMigrated(config.dbPath);
-const db = new Database(config.dbPath, { readonly: true });
-const data = computeReport(db);
-db.close();
+const db = await Db.open(config.chainId, { readonly: true });
+const data = await computeReport(db);
+await db.close();
 
 const md = renderMarkdown(data);
 writeFileSync('report.md', md);
