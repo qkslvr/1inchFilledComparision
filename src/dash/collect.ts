@@ -28,14 +28,20 @@ function decidedChip(v: {
 }): Chip {
   if (v.has_data !== 1) return { kind: 'none', text: 'no data' };
   switch (v.cls) {
+    // classify() can reach a verdict without a figure to put on it: a win whose
+    // notional never resolved, or a LOSE_PRICE whose best tick fell outside the
+    // decision horizon. Say so rather than rendering "undefined bps".
     case 'WIN':
-      return { kind: 'win', text: `won +${v.margin_bps?.toFixed(1)} bps` };
+      return { kind: 'win', text: v.margin_bps === null ? 'won' : `won +${v.margin_bps.toFixed(1)} bps` };
     case 'WIN_DEGRADED':
-      return { kind: 'win', text: `won* +${v.margin_bps?.toFixed(1)} bps` };
+      return { kind: 'win', text: v.margin_bps === null ? 'won*' : `won* +${v.margin_bps.toFixed(1)} bps` };
     case 'LOSE_SPEED':
       return { kind: 'late', text: 'profitable too late' };
     case 'LOSE_PRICE':
-      return { kind: 'short', text: `${v.shortfall_bps?.toFixed(1)} bps short` };
+      return {
+        kind: 'short',
+        text: v.shortfall_bps === null ? 'never profitable' : `${v.shortfall_bps.toFixed(1)} bps short`,
+      };
     case 'NO_DEPTH':
       return { kind: 'thin', text: 'book too thin' };
     case 'UNFILLABLE':
@@ -80,9 +86,25 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
   ] = await Promise.all([
     db.tokens(),
     db.get(`SELECT * FROM runs ORDER BY id DESC LIMIT 1`),
-    db.all(`SELECT started_at_ms, ended_at_ms FROM runs`) as Promise<
-      Array<{ started_at_ms: number; ended_at_ms: number | null }>
-    >,
+    // Observed time is the sum of per-run spans. A run with no ended_at_ms was
+    // killed uncleanly, and ending it at "now" credited it every hour since —
+    // 11 short runs read as 2,900 hours. End it at its own last recorded
+    // activity instead, bounded by the next run's start, which is the rule the
+    // report already uses.
+    db.all(
+      `SELECT started_at_ms,
+              COALESCE(ended_at_ms, GREATEST(
+                COALESCE((SELECT MAX(ts_ms) FROM ticks
+                          WHERE ts_ms >= r.started_at_ms AND ts_ms < r.next_start), r.started_at_ms),
+                COALESCE((SELECT MAX(received_at_ms) FROM orders
+                          WHERE received_at_ms >= r.started_at_ms AND received_at_ms < r.next_start), r.started_at_ms),
+                COALESCE((SELECT MAX(ts_ms) FROM events
+                          WHERE ts_ms >= r.started_at_ms AND ts_ms < r.next_start), r.started_at_ms)
+              )) AS ended_at_ms
+       FROM (SELECT id, started_at_ms, ended_at_ms,
+                    COALESCE(LEAD(started_at_ms) OVER (ORDER BY id), 9223372036854775807) AS next_start
+             FROM runs) r`
+    ) as Promise<Array<{ started_at_ms: number; ended_at_ms: number }>>,
     venueScoreboard(db),
     db.get(
       `SELECT COUNT(*) AS seen,
@@ -156,7 +178,7 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
     o.pair ? o.pair.replace('_', '/') : `${tokenLabel(o.maker_asset)} > ${tokenLabel(o.taker_asset)}`;
 
   let activeMs = 0;
-  for (const r of runs) activeMs += Math.max(0, (r.ended_at_ms ?? Date.now()) - r.started_at_ms);
+  for (const r of runs) activeMs += Math.max(0, r.ended_at_ms - r.started_at_ms);
 
   const venues = VENUES.map(({ venue, name }) => {
     const r = venueRows.get(venue);
