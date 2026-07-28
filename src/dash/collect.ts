@@ -59,69 +59,45 @@ function liveChip(edge: string | null, notionalTaker: string | null, degraded: b
 const NO_MARKET: Chip = { kind: 'none', text: 'no market' };
 
 async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string, unknown>> {
-  const symbols = new Map((await db.tokens()).map((t) => [t.address.toLowerCase(), t.symbol]));
-  const tokenLabel = (address: string): string =>
-    symbols.get(address.toLowerCase()) ?? address.slice(0, 8) + '..';
-  const pairLabel = (o: Record<string, any>): string =>
-    o.pair ? o.pair.replace('_', '/') : `${tokenLabel(o.maker_asset)} > ${tokenLabel(o.taker_asset)}`;
-
-  const run = await db.get(`SELECT * FROM runs ORDER BY id DESC LIMIT 1`);
-  const runs = (await db.all(`SELECT started_at_ms, ended_at_ms FROM runs`)) as Array<{
-    started_at_ms: number;
-    ended_at_ms: number | null;
-  }>;
-  let activeMs = 0;
-  for (const r of runs) activeMs += Math.max(0, (r.ended_at_ms ?? Date.now()) - r.started_at_ms);
-
-  // --- venue scoreboard, aggregated in the database ---
-  // Note: these medians interpolate between the two middle values (percentile_cont).
-  // The SQLite dashboard took the lower of the two.
-  const venueRows = (await db.all(
-    `SELECT venue,
-            COUNT(*) FILTER (WHERE cls <> 'NO_TICKS') AS decided,
-            COUNT(*) FILTER (WHERE cls = 'WIN') AS wins,
-            COUNT(*) FILTER (WHERE cls IN ('LOSE_SPEED','LOSE_PRICE')) AS losses,
-            percentile_cont(0.5) WITHIN GROUP (ORDER BY margin_bps)
-              FILTER (WHERE cls = 'WIN' AND margin_bps IS NOT NULL) AS median_win_bps,
-            percentile_cont(0.5) WITHIN GROUP (ORDER BY shortfall_bps)
-              FILTER (WHERE cls = 'LOSE_PRICE' AND shortfall_bps IS NOT NULL) AS median_miss_bps
-     FROM decided_venue_outcomes WHERE has_data = 1 GROUP BY venue`
-  )) as Array<Record<string, any>>;
-  const byVenue = new Map(venueRows.map((r) => [r.venue, r]));
-  const venues = VENUES.map(({ venue, name }) => {
-    const r = byVenue.get(venue);
-    const decided = r?.decided ?? 0;
-    const wins = r?.wins ?? 0;
-    const losses = r?.losses ?? 0;
-    return {
-      name,
-      decided,
-      wins,
-      losses,
-      thin: decided - wins - losses,
-      medianWinBps: r?.median_win_bps ?? null,
-      medianMissBps: r?.median_miss_bps ?? null,
-    };
-  });
-
-  // --- funnel ---
-  const counts = (await db.get(
-    `SELECT COUNT(*) AS seen,
-            COUNT(*) FILTER (WHERE eligible = 1 OR kyber_only = 1) AS hedgeable,
-            COALESCE(SUM(size_usd) FILTER (WHERE eligible = 1 OR kyber_only = 1), 0) AS hedgeable_usd
-     FROM orders`
-  )) as Record<string, any>;
-  const priced = (await db.get(
-    `SELECT COUNT(*) AS c FROM orders o WHERE (o.eligible = 1 OR o.kyber_only = 1)
-     AND EXISTS (SELECT 1 FROM ticks t WHERE t.order_hash = o.order_hash)`
-  )) as { c: number };
-  const won = (await db.get(
-    `SELECT COUNT(*) AS c, COALESCE(SUM(size_usd), 0) AS usd FROM decided_outcomes WHERE any_win = 1`
-  )) as { c: number; usd: number };
-
-  // --- live orders ---
-  const live = (
-    (await db.all(
+  // Every query below is independent, so they go out as one wave. Sequentially
+  // this cost a full round trip each — 17 per chain, and against a hosted
+  // database that was most of a 15-second response.
+  const [
+    tokenRows,
+    run,
+    runs,
+    venueRows,
+    counts,
+    priced,
+    won,
+    liveRows,
+    decidedRows,
+    lastWs,
+    activity,
+    bookRows,
+    unsupportedRows,
+    eventRows,
+  ] = await Promise.all([
+    db.tokens(),
+    db.get(`SELECT * FROM runs ORDER BY id DESC LIMIT 1`),
+    db.all(`SELECT started_at_ms, ended_at_ms FROM runs`) as Promise<
+      Array<{ started_at_ms: number; ended_at_ms: number | null }>
+    >,
+    venueScoreboard(db),
+    db.get(
+      `SELECT COUNT(*) AS seen,
+              COUNT(*) FILTER (WHERE eligible = 1 OR kyber_only = 1) AS hedgeable,
+              COALESCE(SUM(size_usd) FILTER (WHERE eligible = 1 OR kyber_only = 1), 0) AS hedgeable_usd
+       FROM orders`
+    ) as Promise<Record<string, any>>,
+    db.get(
+      `SELECT COUNT(*) AS c FROM orders o WHERE (o.eligible = 1 OR o.kyber_only = 1)
+       AND EXISTS (SELECT 1 FROM ticks t WHERE t.order_hash = o.order_hash)`
+    ) as Promise<{ c: number }>,
+    db.get(
+      `SELECT COUNT(*) AS c, COALESCE(SUM(size_usd), 0) AS usd FROM decided_outcomes WHERE any_win = 1`
+    ) as Promise<{ c: number; usd: number }>,
+    db.all(
       `SELECT o.order_hash, o.pair, o.kyber_only, o.maker_asset, o.taker_asset,
               o.auction_start_ms, o.auction_duration_s, o.deadline_ms,
               t.edge_default, t.edge_kyber, t.edge_bebop, t.degraded, t.kyber_degraded, t.bebop_degraded,
@@ -130,8 +106,75 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
        LEFT JOIN ticks t ON t.id = (SELECT MAX(id) FROM ticks WHERE order_hash = o.order_hash)
        WHERE (o.eligible = 1 OR o.kyber_only = 1) AND o.terminal_status IS NULL
        ORDER BY o.received_at_ms DESC LIMIT 100`
-    )) as Array<Record<string, any>>
-  ).map((o) => {
+    ) as Promise<Array<Record<string, any>>>,
+    db.all(
+      `SELECT d.order_hash, d.terminal_at_ms, d.pair, d.maker_asset, d.taker_asset,
+              d.size_usd, d.outcome, d.lead_s,
+              v.venue, v.cls, v.margin_bps, v.shortfall_bps, v.has_data
+       FROM (SELECT * FROM decided_outcomes ORDER BY terminal_at_ms DESC LIMIT 20) d
+       LEFT JOIN decided_venue_outcomes v ON v.order_hash = d.order_hash
+       ORDER BY d.terminal_at_ms DESC`
+    ) as Promise<Array<Record<string, any>>>,
+    db.get(
+      `SELECT kind FROM events WHERE kind IN ('ws_connected','ws_disconnected') ORDER BY id DESC LIMIT 1`
+    ) as Promise<{ kind: string } | undefined>,
+    db.get(
+      `SELECT (SELECT MAX(received_at_ms) FROM orders) AS last_order,
+              (SELECT MAX(ts_ms) FROM ticks) AS last_tick,
+              (SELECT COUNT(*) FROM ticks) AS ticks_total,
+              (SELECT COUNT(*) FROM decided_outcomes) AS decided_total`
+    ) as Promise<Record<string, any>>,
+    Promise.all(
+      chain.pairs.map(async (p) => {
+        const [snap, ref] = await Promise.all([
+          db.get(
+            `SELECT ts_ms, mid, bid_depth_base, ask_depth_base FROM snapshots WHERE ticker = ? ORDER BY id DESC LIMIT 1`,
+            [p.ticker]
+          ) as Promise<Record<string, any> | undefined>,
+          db.get(`SELECT ts_ms, mid FROM ref_prices WHERE ticker = ? ORDER BY ts_ms DESC LIMIT 1`, [
+            p.ticker,
+          ]) as Promise<Record<string, any> | undefined>,
+        ]);
+        return { pair: p, snap, ref };
+      })
+    ),
+    db.all(
+      `SELECT asset, COUNT(*) AS c FROM (
+         SELECT maker_asset AS asset FROM orders WHERE eligible = 0 AND kyber_only = 0
+         UNION ALL SELECT taker_asset FROM orders WHERE eligible = 0 AND kyber_only = 0
+       ) AS assets GROUP BY asset ORDER BY c DESC LIMIT 8`
+    ) as Promise<Array<{ asset: string; c: number }>>,
+    db.all(`SELECT ts_ms, kind, detail_json FROM events ORDER BY id DESC LIMIT 10`) as Promise<
+      Array<Record<string, any>>
+    >,
+  ]);
+
+  const symbols = new Map(tokenRows.map((t) => [t.address.toLowerCase(), t.symbol]));
+  const tokenLabel = (address: string): string =>
+    symbols.get(address.toLowerCase()) ?? address.slice(0, 8) + '..';
+  const pairLabel = (o: Record<string, any>): string =>
+    o.pair ? o.pair.replace('_', '/') : `${tokenLabel(o.maker_asset)} > ${tokenLabel(o.taker_asset)}`;
+
+  let activeMs = 0;
+  for (const r of runs) activeMs += Math.max(0, (r.ended_at_ms ?? Date.now()) - r.started_at_ms);
+
+  const venues = VENUES.map(({ venue, name }) => {
+    const r = venueRows.get(venue);
+    const decidedCount = r?.decided ?? 0;
+    const wins = r?.wins ?? 0;
+    const losses = r?.losses ?? 0;
+    return {
+      name,
+      decided: decidedCount,
+      wins,
+      losses,
+      thin: decidedCount - wins - losses,
+      medianWinBps: r?.median_win_bps ?? null,
+      medianMissBps: r?.median_miss_bps ?? null,
+    };
+  });
+
+  const live = liveRows.map((o) => {
     const now = Date.now();
     const durMs = (o.auction_duration_s ?? 0) * 1000;
     const elapsed = o.auction_start_ms !== null ? now - o.auction_start_ms : 0;
@@ -152,15 +195,6 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
     };
   });
 
-  // --- decided table: precomputed verdicts, latest 20 ---
-  const decidedRows = (await db.all(
-    `SELECT d.order_hash, d.terminal_at_ms, d.pair, d.maker_asset, d.taker_asset,
-            d.size_usd, d.outcome, d.lead_s,
-            v.venue, v.cls, v.margin_bps, v.shortfall_bps, v.has_data
-     FROM (SELECT * FROM decided_outcomes ORDER BY terminal_at_ms DESC LIMIT 20) d
-     LEFT JOIN decided_venue_outcomes v ON v.order_hash = d.order_hash
-     ORDER BY d.terminal_at_ms DESC`
-  )) as Array<Record<string, any>>;
   const decidedByHash = new Map<string, Record<string, any>>();
   for (const r of decidedRows) {
     let entry = decidedByHash.get(r.order_hash);
@@ -181,16 +215,6 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
   }
   const decided = [...decidedByHash.values()];
 
-  // --- ops drawer ---
-  const lastWs = (await db.get(
-    `SELECT kind FROM events WHERE kind IN ('ws_connected','ws_disconnected') ORDER BY id DESC LIMIT 1`
-  )) as { kind: string } | undefined;
-  const activity = (await db.get(
-    `SELECT (SELECT MAX(received_at_ms) FROM orders) AS last_order,
-            (SELECT MAX(ts_ms) FROM ticks) AS last_tick,
-            (SELECT COUNT(*) FROM ticks) AS ticks_total,
-            (SELECT COUNT(*) FROM decided_outcomes) AS decided_total`
-  )) as Record<string, any>;
   const healthy =
     run !== undefined &&
     run.ended_at_ms === null &&
@@ -198,40 +222,21 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
     (activity.last_order === null ||
       Date.now() - Math.max(activity.last_order, activity.last_tick ?? 0) < 20 * 60_000);
 
-  const books = [];
-  for (const p of chain.pairs) {
-    const snap = (await db.get(
-      `SELECT ts_ms, mid, bid_depth_base, ask_depth_base FROM snapshots WHERE ticker = ? ORDER BY id DESC LIMIT 1`,
-      [p.ticker]
-    )) as Record<string, any> | undefined;
-    const ref = (await db.get(`SELECT ts_ms, mid FROM ref_prices WHERE ticker = ? ORDER BY ts_ms DESC LIMIT 1`, [
-      p.ticker,
-    ])) as Record<string, any> | undefined;
+  const books = bookRows.map(({ pair: p, snap, ref }) => {
     const snapFresher = snap !== undefined && (ref === undefined || snap.ts_ms >= ref.ts_ms);
     const src = snapFresher ? snap : ref;
-    books.push({
+    return {
       ticker: p.ticker,
       mid: src ? `${fmtUnits(BigInt(src.mid), p.quote.decimals)} USDC` : null,
       age: src ? `${Math.round((Date.now() - src.ts_ms) / 1000)}s` : '?',
       bid: snapFresher ? `${fmtUnits(BigInt(snap!.bid_depth_base), p.base.decimals)} ${p.base.symbol}` : null,
       ask: snapFresher ? `${fmtUnits(BigInt(snap!.ask_depth_base), p.base.decimals)} ${p.base.symbol}` : null,
-    });
-  }
+    };
+  });
 
-  const topUnsupported = (
-    (await db.all(
-      `SELECT asset, COUNT(*) AS c FROM (
-         SELECT maker_asset AS asset FROM orders WHERE eligible = 0 AND kyber_only = 0
-         UNION ALL SELECT taker_asset FROM orders WHERE eligible = 0 AND kyber_only = 0
-       ) AS assets GROUP BY asset ORDER BY c DESC LIMIT 8`
-    )) as Array<{ asset: string; c: number }>
-  ).map((r) => ({ token: tokenLabel(r.asset), orders: r.c }));
+  const topUnsupported = unsupportedRows.map((r) => ({ token: tokenLabel(r.asset), orders: r.c }));
 
-  const events = (
-    (await db.all(`SELECT ts_ms, kind, detail_json FROM events ORDER BY id DESC LIMIT 10`)) as Array<
-      Record<string, any>
-    >
-  ).map((e) => ({
+  const events = eventRows.map((e) => ({
     time: new Date(e.ts_ms).toISOString().slice(11, 19),
     kind: e.kind,
     detail: e.detail_json ? String(e.detail_json).slice(0, 90) : '',
@@ -274,6 +279,23 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
   };
 }
 
+/** Note: these medians interpolate between the two middle values
+ *  (percentile_cont). The SQLite dashboard took the lower of the two. */
+async function venueScoreboard(db: Db): Promise<Map<string, Record<string, any>>> {
+  const rows = (await db.all(
+    `SELECT venue,
+            COUNT(*) FILTER (WHERE cls <> 'NO_TICKS') AS decided,
+            COUNT(*) FILTER (WHERE cls = 'WIN') AS wins,
+            COUNT(*) FILTER (WHERE cls IN ('LOSE_SPEED','LOSE_PRICE')) AS losses,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY margin_bps)
+              FILTER (WHERE cls = 'WIN' AND margin_bps IS NOT NULL) AS median_win_bps,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY shortfall_bps)
+              FILTER (WHERE cls = 'LOSE_PRICE' AND shortfall_bps IS NOT NULL) AS median_miss_bps
+     FROM decided_venue_outcomes WHERE has_data = 1 GROUP BY venue`
+  )) as Array<Record<string, any>>;
+  return new Map(rows.map((r) => [r.venue, r]));
+}
+
 /** Chains whose Postgres schema exists, i.e. that a collector has run for. */
 async function liveChains(probe: Db): Promise<ResolvedChain[]> {
   const rows = (await probe.all(
@@ -291,7 +313,10 @@ const pools = new Map<number, Db>();
 async function dbFor(chainId: number): Promise<Db> {
   let db = pools.get(chainId);
   if (!db) {
-    db = await Db.open(chainId, { readonly: true, max: 1 });
+    // Each chain's queries go out as one parallel wave, so the pool needs room
+    // for them; with max: 1 they would queue on a single connection and pay the
+    // round trip serially anyway.
+    db = await Db.open(chainId, { readonly: true, max: 6 });
     pools.set(chainId, db);
   }
   return db;
@@ -300,9 +325,8 @@ async function dbFor(chainId: number): Promise<Db> {
 export async function collectAll(): Promise<Record<string, unknown>> {
   const probe = await dbFor(config.chainId);
   const chains = await liveChains(probe);
-  const out: Record<string, unknown>[] = [];
-  for (const chain of chains) {
-    out.push(await collectChain(chain, await dbFor(chain.chainId)));
-  }
+  const out = await Promise.all(
+    chains.map(async (chain) => collectChain(chain, await dbFor(chain.chainId)))
+  );
   return { now: new Date().toISOString(), chains: out };
 }

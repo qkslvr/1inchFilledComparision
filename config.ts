@@ -97,7 +97,9 @@ const profiles: Record<string, ChainProfile> = {
 };
 profiles.eth = profiles.ethereum!;
 
-const chainName = (process.env.CHAIN ?? 'base').toLowerCase();
+// `||`, not `??`: .env.example ships CHAIN= as an empty placeholder, and the
+// loader above turns that into '' rather than leaving it unset.
+const chainName = (process.env.CHAIN || 'base').toLowerCase();
 const profile = profiles[chainName];
 if (!profile) {
   throw new Error(`unknown CHAIN "${chainName}" (expected: base, ethereum)`);
