@@ -20,6 +20,12 @@ const TERMINAL_MAX_ATTEMPTS = 3;
  *  Terminal-status fetches go through the shared 1inch rate limiter. */
 export class Lifecycle {
   private stopped = false;
+  /** Hashes currently being registered. The existence check is a database round
+   *  trip now, so two sources racing on the same order — the boot sweep and the
+   *  poll fallback both fire at startup — could each pass it before either had
+   *  inserted. The row itself is safe (ON CONFLICT DO NOTHING), but the order
+   *  would be registered with the engine twice and take two quoter slots. */
+  private readonly registering = new Set<string>();
   terminalFetches = 0;
 
   constructor(
@@ -53,6 +59,22 @@ export class Lifecycle {
 
   /** Shared entry for WS order_created, boot sweep, and poll fallback. */
   async handleOrderCreated(
+    payload: OrderCreatedPayload | ActiveOrder,
+    receivedAtMs: number,
+    source: 'ws' | 'sweep' | 'poll',
+    lateSeen: boolean
+  ): Promise<void> {
+    const { orderHash } = payload;
+    if (this.registering.has(orderHash)) return;
+    this.registering.add(orderHash);
+    try {
+      await this.registerOrder(payload, receivedAtMs, source, lateSeen);
+    } finally {
+      this.registering.delete(orderHash);
+    }
+  }
+
+  private async registerOrder(
     payload: OrderCreatedPayload | ActiveOrder,
     receivedAtMs: number,
     source: 'ws' | 'sweep' | 'poll',
