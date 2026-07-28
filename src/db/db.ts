@@ -421,6 +421,12 @@ export class Db {
     this.enqueue(`UPDATE orders SET t_actual_chain_ms = ? WHERE order_hash = ?`, [tsMs, orderHash]);
   }
 
+  /** Inserted as kyber-only, but no quoter slot was free: record it as an
+   *  untracked unsupported order instead. */
+  demoteKyberOnly(orderHash: string): void {
+    this.enqueue(`UPDATE orders SET kyber_only = 0 WHERE order_hash = ?`, [orderHash]);
+  }
+
   markSkipError(orderHash: string, reason: string): void {
     this.enqueue(`UPDATE orders SET eligible = 0, skip_reason = ? WHERE order_hash = ?`, [
       reason,

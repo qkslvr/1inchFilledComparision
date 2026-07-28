@@ -163,29 +163,11 @@ export class Lifecycle {
       return false; // undecodable: fall back to the plain-unsupported path
     }
     const remaining = BigInt(payload.remainingMakerAmount);
-    const registered = this.engine.register({
-      orderHash,
-      decoded,
-      pair: null,
-      direction: null,
-      makerAsset: order.makerAsset,
-      takerAsset: order.takerAsset,
-      remainingMaker: remaining,
-      allowPartialFills: decoded.allowPartialFills,
-      deadlineMs: decoded.deadlineMs,
-      kyberOnly: true,
-      tShadowRecorded: false,
-      maxEdge: null,
-      tShadowKyberRecorded: false,
-      maxEdgeKyber: null,
-      tShadowBebopRecorded: false,
-      maxEdgeBebop: null,
-    });
-    if (!registered) return false; // no quoter slot free
 
-    // Registration has to come first (it can fail on a full quoter), so the row
-    // lands just after. The engine's first tick is a second away and this insert
-    // resolves in milliseconds, so the tick's FK finds its order.
+    // The order row goes in before the engine can tick, so the tick's foreign
+    // key always finds it. Registering first and inserting after looked safe —
+    // the first tick is a second away — but an insert waits behind the pending
+    // write batch, and under load that queue is deeper than one second.
     await this.db.insertOrder({
       orderHash,
       runId: this.runId(),
@@ -217,6 +199,31 @@ export class Lifecycle {
       extensionRaw: extension,
       orderStructJson: JSON.stringify(order),
     });
+
+    const registered = this.engine.register({
+      orderHash,
+      decoded,
+      pair: null,
+      direction: null,
+      makerAsset: order.makerAsset,
+      takerAsset: order.takerAsset,
+      remainingMaker: remaining,
+      allowPartialFills: decoded.allowPartialFills,
+      deadlineMs: decoded.deadlineMs,
+      kyberOnly: true,
+      tShadowRecorded: false,
+      maxEdge: null,
+      tShadowKyberRecorded: false,
+      maxEdgeKyber: null,
+      tShadowBebopRecorded: false,
+      maxEdgeBebop: null,
+    });
+    if (!registered) {
+      // No quoter slot. The row is already in, so demote it to what it would
+      // have been on the plain-unsupported path: counted as volume, not tracked.
+      this.db.demoteKyberOnly(orderHash);
+      return true;
+    }
     log(`registered ${orderHash} kyber-only ~$${usd.toFixed(0)} remaining=${remaining} (${source}${lateSeen ? ', late' : ''})`);
     return true;
   }
