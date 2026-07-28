@@ -1,0 +1,17 @@
+node_modules/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+report.md
+report.json
+.env
+
+# Generated report payloads (report-base.json alone is 33 MB)
+report-*.json
+
+# Exported datasets; export/README.md is kept
+export/*.csv
+export/*.zip
+
+.DS_Store
+.vercel/

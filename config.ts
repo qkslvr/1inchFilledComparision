@@ -1,0 +1,244 @@
+import { readFileSync } from 'node:fs';
+import type { PairConfig } from './src/types.js';
+
+// Minimal .env loader: KEY=VALUE lines, no quoting rules, real env wins.
+try {
+  for (const line of readFileSync(new URL('./.env', import.meta.url), 'utf8').split('\n')) {
+    const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line);
+    if (m && m[1] && process.env[m[1]] === undefined) process.env[m[1]] = m[2];
+  }
+} catch {
+  // no .env file, fine
+}
+
+/** Same sentinel on every EVM chain. */
+export const NATIVE_SENTINEL = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+
+interface ChainProfile {
+  chainId: number;
+  label: string;
+  /** canonical wrapped-ETH address, for hedge_asset_kind bookkeeping */
+  wethAddress: string;
+  pairs: PairConfig[];
+  rpcEnvVar: string;
+  rpcUrlDefault: string;
+  dbPathDefault: string;
+  dashPortDefault: number;
+  /** KyberSwap aggregator chain slug */
+  kyberChainSlug: string;
+  /** token pairs (unordered) excluded from kyber-only tracking, e.g. dull
+   *  stable rotations that would hog the quote slots */
+  kyberOnlySkipPairs: Array<[string, string]>;
+  /** chain-specific honesty caveats, rendered in the report header */
+  reportCaveats: string[];
+}
+
+const WETH_BASE = '0x4200000000000000000000000000000000000006';
+const USDC_BASE = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
+const CBBTC_BASE = '0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf';
+
+const WETH_ETHEREUM = '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2';
+const USDC_ETHEREUM = '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48';
+const WBTC_ETHEREUM = '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599';
+
+const profiles: Record<string, ChainProfile> = {
+  base: {
+    chainId: 8453,
+    label: 'Base',
+    wethAddress: WETH_BASE,
+    pairs: [
+      {
+        ticker: 'ETH_USDC',
+        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_BASE, NATIVE_SENTINEL] },
+        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_BASE] },
+      },
+      {
+        // KalqiX URL ticker is case-sensitive: /v1/markets/cbBTC_USDC/order-book
+        ticker: 'cbBTC_USDC',
+        base: { symbol: 'cbBTC', decimals: 8, addresses: [CBBTC_BASE] },
+        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_BASE] },
+      },
+    ],
+    rpcEnvVar: 'BASE_RPC_URL',
+    rpcUrlDefault: 'https://mainnet.base.org',
+    dbPathDefault: './shadow.sqlite',
+    dashPortDefault: 8787,
+    kyberChainSlug: 'base',
+    // USDbC<->USDC rotation: measured at ~17 bps underwater after fees, and it
+    // floods the kyber-only slots. Recorded as unsupported volume only.
+    kyberOnlySkipPairs: [['0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca', USDC_BASE]],
+    reportCaveats: [],
+  },
+  ethereum: {
+    chainId: 1,
+    label: 'Ethereum',
+    wethAddress: WETH_ETHEREUM,
+    pairs: [
+      {
+        ticker: 'ETH_USDC',
+        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
+        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ETHEREUM] },
+      },
+      {
+        // WBTC hedged on KalqiX's cbBTC market: same URL ticker, different wrapper
+        ticker: 'cbBTC_USDC',
+        base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
+        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ETHEREUM] },
+      },
+    ],
+    rpcEnvVar: 'ETH_RPC_URL',
+    rpcUrlDefault: 'https://ethereum-rpc.publicnode.com',
+    dbPathDefault: './shadow-eth.sqlite',
+    dashPortDefault: 8788,
+    kyberChainSlug: 'ethereum',
+    kyberOnlySkipPairs: [],
+    reportCaveats: [
+      'Orders are on Ethereum but the hedge venue (KalqiX) settles on Base; cross-chain inventory and rebalancing costs are ignored. This measures pricing headroom only.',
+      'WBTC is hedged on the cbBTC order book. Unlike WETH and native ETH, WBTC and cbBTC are different custodial wrappers; the wrapper basis is ignored.',
+    ],
+  },
+};
+profiles.eth = profiles.ethereum!;
+
+const chainName = (process.env.CHAIN ?? 'base').toLowerCase();
+const profile = profiles[chainName];
+if (!profile) {
+  throw new Error(`unknown CHAIN "${chainName}" (expected: base, ethereum)`);
+}
+
+/** unordered-pair keys ("a|b", lowercase-sorted) for the kyber-only skip list */
+const kyberOnlySkipKeys = new Set(
+  profile.kyberOnlySkipPairs.map(([a, b]) => [a.toLowerCase(), b.toLowerCase()].sort().join('|'))
+);
+
+export function isKyberOnlySkipped(makerAsset: string, takerAsset: string): boolean {
+  return kyberOnlySkipKeys.has([makerAsset.toLowerCase(), takerAsset.toLowerCase()].sort().join('|'));
+}
+
+export const config = {
+  chainId: profile.chainId,
+  chainLabel: profile.label,
+  wethAddress: profile.wethAddress,
+  pairs: profile.pairs,
+  reportCaveats: profile.reportCaveats,
+  dashPortDefault: profile.dashPortDefault,
+  /** KalqiX book levels per side to fetch and store. */
+  bookDepth: 50,
+  sampleIntervalMs: 1000,
+  pricingIntervalMs: 1000,
+  refPriceIntervalMs: 30_000,
+  gasPollIntervalMs: 30_000,
+  /** Gas units for a hypothetical fill tx, incl. wrap/unwrap allowance for native-ETH takers. */
+  gasUnits: 300_000n,
+  kalqixTakerFeeBps: 8n,
+  safetyMarginBps: 10n,
+  /** A decision tick whose snapshot is older than this is degraded (no-lookahead rule). */
+  degradedSnapshotAgeMs: 3000,
+  oneInchApiBase: 'https://api.1inch.dev/fusion',
+  oneInchWsBase: 'https://api.1inch.dev/fusion/ws',
+  kalqixApiBase: 'https://api.kalqix.com/v1',
+  baseRpcUrl: process.env[profile.rpcEnvVar] || profile.rpcUrlDefault,
+  dbPath: process.env.DB_PATH || profile.dbPathDefault,
+  reportCurrency: 'USDC',
+  /** Half the Dev Portal ~1 rps budget: two per-chain collectors share one API key. */
+  restRatePerSec: 0.5,
+  restBurst: 2,
+  activePollFallbackMs: 5000,
+  /** force-reconnect a "connected" 1inch WS that has delivered nothing for this
+   *  long (silent TCP death has no close event; Base flow makes 5 min of true
+   *  silence implausible, and a spurious reconnect costs ~2 REST calls) */
+  wsStaleMs: 300_000,
+  /** Terminal-status fetch grace after order deadline. */
+  reapGraceMs: 60_000,
+  sensitivity: {
+    safetyMarginBps: [0n, 5n, 10n, 20n, 40n],
+    gasMult: [0.5, 1, 2],
+  },
+  bebop: {
+    wsBase: 'wss://api.bebop.xyz/pmm',
+    restBase: 'https://api.bebop.xyz/pmm',
+    chainSlug: profile.kyberChainSlug, // bebop uses the same slugs (base, ethereum)
+    /** our assumed markup on a Bebop-hedged fill */
+    feeBps: 3n,
+    /** settlement tx gas for an RFQ self-execution fill */
+    gasUnits: 250_000n,
+    /** a tick using stream data older than this is bebop-degraded */
+    degradedAgeMs: 5000,
+    /** the stream is chatty (all pairs, sub-second); a minute of silence = dead socket */
+    staleReconnectMs: 60_000,
+  },
+  kyber: {
+    apiBase: 'https://aggregator-api.kyberswap.com',
+    chainSlug: profile.kyberChainSlug,
+    clientId: 'shadow-resolver',
+    /** our assumed markup on a Kyber-hedged fill */
+    feeBps: 3n,
+    /** fallback swap-leg gas units when the quote carries no estimate */
+    fallbackGasUnits: 400_000n,
+    quoteIntervalMs: 2000,
+    quoteTimeoutMs: 4000,
+    /** a tick using a quote older than this (or for a stale size) is kyber-degraded */
+    degradedQuoteAgeMs: 5000,
+    /** cap on concurrent per-order quote loops (rate-limit guard) */
+    maxTrackedOrders: 6,
+    /** KalqiX-unsupported orders also get Kyber-only tracking when sizeable... */
+    unsupportedMinUsd: 1000,
+    /** ...but never more than this many at once (KalqiX-pair orders keep priority) */
+    maxKyberOnlyTracked: 4,
+  },
+  notionalBucketsUsd: [1_000, 5_000, 25_000, 100_000],
+} as const;
+
+export function bebopApiKey(): string | null {
+  return process.env.BEBOP_API_KEY || null;
+}
+
+/** All chain profiles resolved (env-aware), for cross-chain readers like the
+ *  combined dashboard. The collector still uses the single CHAIN-selected view. */
+export interface ResolvedChain {
+  key: string;
+  chainId: number;
+  label: string;
+  wethAddress: string;
+  pairs: PairConfig[];
+  rpcUrl: string;
+  dbPath: string;
+}
+
+export const allChains: ResolvedChain[] = ['base', 'ethereum'].map((key) => {
+  const p = profiles[key]!;
+  return {
+    key,
+    chainId: p.chainId,
+    label: p.label,
+    wethAddress: p.wethAddress,
+    pairs: p.pairs,
+    rpcUrl: process.env[p.rpcEnvVar] || p.rpcUrlDefault,
+    dbPath: p.dbPathDefault,
+  };
+});
+
+export function oneInchApiKey(): string {
+  const key = process.env.ONEINCH_API_KEY;
+  if (!key) {
+    throw new Error('ONEINCH_API_KEY is not set (env or .env file). Get one at https://portal.1inch.dev');
+  }
+  return key;
+}
+
+export function pairForTokens(makerAsset: string, takerAsset: string): {
+  pair: PairConfig;
+  direction: 'SELL_BASE' | 'BUY_BASE';
+} | null {
+  const maker = makerAsset.toLowerCase();
+  const taker = takerAsset.toLowerCase();
+  for (const pair of config.pairs) {
+    if (pair.base.addresses.includes(maker) && pair.quote.addresses.includes(taker)) {
+      return { pair, direction: 'SELL_BASE' };
+    }
+    if (pair.quote.addresses.includes(maker) && pair.base.addresses.includes(taker)) {
+      return { pair, direction: 'BUY_BASE' };
+    }
+  }
+  return null;
+}
