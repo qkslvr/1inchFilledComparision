@@ -74,8 +74,29 @@ WantedBy=multi-user.target
 sudo systemctl enable --now shadow-collector@base shadow-collector@ethereum
 ```
 
+Without root, `~/workspace/restart-collectors.sh` does the same job with
+`setsid nohup` — it survives logout but not a reboot, and it pulls the latest
+commit before starting:
+
+```bash
+bash ~/workspace/restart-collectors.sh
+tail -f ~/workspace/1inchFilledComparision/logs/collect-eth.log
+```
+
 Restarts are safe: the collector resumes non-terminal orders from the database
 and records a `ws_gap` event covering the downtime.
+
+### Watching for write lag
+
+Round trip to Railway is ~280ms, so the write queue is the thing to watch if
+collection ever gets much busier. This should stay in single-digit seconds:
+
+```sql
+SELECT round((extract(epoch from now())*1000 - max(ts_ms))/1000) AS lag_s FROM chain_1.ticks;
+```
+
+A growing number here means writes are being produced faster than they drain;
+the dashboard notices too and reports the chain as unhealthy.
 
 ## 3. Importing the existing SQLite data
 
