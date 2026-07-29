@@ -545,19 +545,26 @@ export class Lifecycle {
     }
   }
 
-  /** Orders past deadline + grace with no terminal event: fetch status directly. */
+  /** Orders past deadline + grace with no terminal event: fetch status directly.
+   *
+   *  One query for the whole live set. Per-order lookups were fine against a
+   *  local file but cost a round trip each here: during a burst that took ~140
+   *  live orders, a pass ran longer than the 30s interval between passes, so
+   *  expired orders were never cleared, kept being priced every second, and the
+   *  write volume grew until it filled the database's disk. */
   async reapExpired(nowMs: number, graceMs: number): Promise<void> {
-    for (const orderHash of this.engine.liveHashes()) {
-      const row = await this.db.get<{ deadline_ms: number | null }>(
-        `SELECT deadline_ms FROM orders WHERE order_hash = ?`,
-        [orderHash]
-      );
-      const deadline = row?.deadline_ms;
-      if (deadline !== null && deadline !== undefined && nowMs > deadline + graceMs) {
-        log(`reaping expired ${orderHash}`);
-        this.engine.unregister(orderHash);
-        this.queueTerminalFetch(orderHash);
-      }
+    const live = this.engine.liveHashes();
+    if (live.length === 0) return;
+    const expired = await this.db.all<{ order_hash: string }>(
+      `SELECT order_hash FROM orders
+       WHERE order_hash = ANY(?) AND deadline_ms IS NOT NULL AND deadline_ms < ?`,
+      [live, nowMs - graceMs]
+    );
+    if (expired.length === 0) return;
+    log(`reaping ${expired.length} expired order(s)`);
+    for (const { order_hash } of expired) {
+      this.engine.unregister(order_hash);
+      this.queueTerminalFetch(order_hash);
     }
   }
 }
