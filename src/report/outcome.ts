@@ -48,7 +48,7 @@ export function buildDecidedOutcome(
       cls: r.cls,
       marginBps: r.marginBps,
       shortfallBps: r.shortfallBps,
-      hasData: ticks.some((t) => t.hedgeProceeds !== null || (venue === 'kalqix' && t.insufficientDepth)),
+      hasData: ticks.some((t) => t.hedgeProceeds !== null || t.insufficientDepth),
     });
     if (r.leadTimeMs !== null && r.cls === 'WIN') leadS = Math.round(r.leadTimeMs / 1000);
   }

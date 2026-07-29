@@ -64,6 +64,10 @@ function liveChip(edge: string | null, notionalTaker: string | null, degraded: b
 
 const NO_MARKET: Chip = { kind: 'none', text: 'no market' };
 
+function isToday(tsMs: number): boolean {
+  return new Date(tsMs).toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10);
+}
+
 async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string, unknown>> {
   // Every query below is independent, so they go out as one wave. Sequentially
   // this cost a full round trip each — 17 per chain, and against a hosted
@@ -222,7 +226,11 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
     let entry = decidedByHash.get(r.order_hash);
     if (!entry) {
       entry = {
-        time: new Date(r.terminal_at_ms).toISOString().slice(11, 19),
+        // Date included once a row isn't from today, otherwise a gap in
+        // collection makes yesterday's rows look interleaved with this morning's.
+        time: isToday(r.terminal_at_ms)
+          ? new Date(r.terminal_at_ms).toISOString().slice(11, 19)
+          : new Date(r.terminal_at_ms).toISOString().slice(5, 16).replace('T', ' '),
         pair: pairLabel(r),
         sizeUsd: r.size_usd,
         outcome: r.outcome === 'filled' ? 'filled by someone' : r.outcome,

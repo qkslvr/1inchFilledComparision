@@ -26,7 +26,10 @@ export function tickForVenue(t: Record<string, any>, venue: Venue): TickData {
     return {
       ...base,
       degraded: t.bebop_degraded === 1,
-      insufficientDepth: false,
+      // A streamed book that produced no output means the walk ran out of depth,
+      // which is a finding ("too big for this venue"), not missing data. The
+      // book's own age is what tells us it was there at all.
+      insufficientDepth: t.bebop_age_ms !== null && t.bebop_age_ms !== undefined && !hasData,
       hedgeProceeds: hasData ? BigInt(t.bebop_out) : null,
       gasCostRaw: hasData ? BigInt(t.gas_cost_raw) + BigInt(t.bebop_gas_cost) : base.gasCostRaw,
       feeCost: hasData && t.bebop_fee !== null ? BigInt(t.bebop_fee) : null,
