@@ -15,23 +15,44 @@ Each chain lives in its own Postgres schema — `chain_8453` for Base, `chain_1`
 for Ethereum — which is what the SQLite build got from having one file per
 chain. Queries stay unqualified; the connection's `search_path` decides.
 
-## 1. Railway
+## 1. Postgres
 
-Create a Postgres instance. You need two connection strings from it:
+Currently Neon. **Use the direct endpoint, not the pooled one.** Neon's pooled
+host (`...-pooler....`) rejects the `search_path` startup parameter, and this
+layout depends on it — it is what lets every query stay unqualified while a
+connection decides which chain it reads. `Db.open()` refuses a `-pooler` host
+with an explanation rather than failing later as missing-relation errors.
 
-- the **public proxy URL** — for the collector VM and for Vercel
-- the internal `*.railway.internal` URL — only if you later run something inside Railway
+Watch the storage ceiling. `ticks` is the only table that grows without bound,
+at roughly 780 bytes a row, one row per live order per second. A Railway
+deployment on a 512 MB volume filled twice and took the collectors down with it.
 
 Then create a read-only role for Vercel, so a leaked frontend env can't write:
 
 ```sql
 CREATE ROLE vercel_ro LOGIN PASSWORD '<pick one>';
+GRANT CONNECT ON DATABASE neondb TO vercel_ro;
 GRANT USAGE ON SCHEMA chain_8453, chain_1 TO vercel_ro;
 GRANT SELECT ON ALL TABLES IN SCHEMA chain_8453, chain_1 TO vercel_ro;
 ALTER DEFAULT PRIVILEGES IN SCHEMA chain_8453, chain_1 GRANT SELECT ON TABLES TO vercel_ro;
 ```
 
 Run this *after* the first collector start, which is what creates the schemas.
+
+## 1a. The 1inch REST budget
+
+The WebSocket feed costs nothing per message, but two things spend REST calls:
+one `getOrderStatus` per finished order, and the active-orders poll that runs
+only while the socket is down. `restRatePerSec: 0.5` per collector is set so two
+chains together stay near the ~1 rps ceiling.
+
+That ceiling is not the binding constraint — the plan's **total** request
+allowance is. Two collectors running continuously exhausted a Dev Portal key in
+about a day, and a second key in two, both ending with `429 The request limit
+for your plan has been exceeded`. Sustained two-chain collection needs a paid
+plan; otherwise run one chain, or accept that orders stop reaching a terminal
+status once the allowance is gone (they are still priced, still reaped, but never
+get a verdict).
 
 ## 2. Collector VM
 
