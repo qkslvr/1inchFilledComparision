@@ -43,10 +43,27 @@ export function toPg(sql: string): string {
 }
 
 function sslFor(url: string): pg.ConnectionConfig['ssl'] {
-  // Railway's internal network is unencrypted by design; its public proxy needs
-  // TLS but presents a cert that doesn't chain to a public root.
+  // Local and Railway-internal traffic is unencrypted by design.
   if (/sslmode=disable/.test(url) || /\.railway\.internal/.test(url)) return false;
-  return { rejectUnauthorized: false };
+  // Railway's public proxy presents a cert that doesn't chain to a public root,
+  // so it is the one host we can't verify. Everything else (Neon included) does
+  // chain, and gets verified.
+  if (/\.rlwy\.net/.test(url) || /\.railway\.app/.test(url)) return { rejectUnauthorized: false };
+  return { rejectUnauthorized: true };
+}
+
+/** Neon's pooled endpoint rejects the search_path startup parameter outright
+ *  ("unsupported startup parameter in options"), and this schema-per-chain
+ *  layout depends on it — it is what lets every query stay unqualified. The
+ *  direct endpoint accepts it, so route there and say so loudly if handed the
+ *  pooled host. */
+function assertUsableHost(url: string): void {
+  if (/-pooler\./.test(url)) {
+    throw new Error(
+      'DATABASE_URL points at a pooled endpoint, which cannot carry the per-chain ' +
+        'search_path this schema layout needs. Remove "-pooler" from the host.'
+    );
+  }
 }
 
 export interface OrderInsert {
@@ -140,6 +157,7 @@ export interface DecidedOutcomeInsert {
 /** Create the chain's schema and tables. Collector-side only: the Vercel reader
  *  connects with a role that has no DDL rights. */
 export async function migrate(connectionString: string, chainId: number): Promise<void> {
+  assertUsableHost(connectionString);
   const schema = schemaFor(chainId);
   const pool = new Pool({ connectionString, ssl: sslFor(connectionString), max: 1 });
   try {
@@ -178,6 +196,7 @@ export class Db {
     if (!connectionString) {
       throw new Error('DATABASE_URL is not set (env or .env file)');
     }
+    assertUsableHost(connectionString);
     const readonly_ = opts.readonly ?? false;
     if (!readonly_) await migrate(connectionString, chainId);
     const pool = new Pool({
