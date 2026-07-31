@@ -87,6 +87,7 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
     bookRows,
     unsupportedRows,
     eventRows,
+    purged,
   ] = await Promise.all([
     db.tokens(),
     db.get(`SELECT * FROM runs ORDER BY id DESC LIMIT 1`),
@@ -173,6 +174,10 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
     db.all(`SELECT ts_ms, kind, detail_json FROM events ORDER BY id DESC LIMIT 10`) as Promise<
       Array<Record<string, any>>
     >,
+    // Retention deletes unhedgeable orders, which are most of the flow by count.
+    // Adding back what it removed keeps "auctions seen" a true statement about
+    // how much was observed rather than how much is still stored.
+    db.get(`SELECT COALESCE(SUM(count), 0) AS c FROM purged_stats`) as Promise<{ c: number }>,
   ]);
 
   const symbols = new Map(tokenRows.map((t) => [t.address.toLowerCase(), t.symbol]));
@@ -180,6 +185,9 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
     symbols.get(address.toLowerCase()) ?? address.slice(0, 8) + '..';
   const pairLabel = (o: Record<string, any>): string =>
     o.pair ? o.pair.replace('_', '/') : `${tokenLabel(o.maker_asset)} > ${tokenLabel(o.taker_asset)}`;
+
+  // Everything the pruner removed still counts as observed flow.
+  const seenTotal = Number(counts.seen) + Number(purged?.c ?? 0);
 
   let activeMs = 0;
   for (const r of runs) activeMs += Math.max(0, r.ended_at_ms - r.started_at_ms);
@@ -277,11 +285,11 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
     label: chain.label,
     chainId: chain.chainId,
     observedHours: activeMs / 3_600_000,
-    ordersSeen: counts.seen,
+    ordersSeen: seenTotal,
     healthy,
     venues,
     funnel: {
-      seen: counts.seen,
+      seen: seenTotal,
       hedgeable: counts.hedgeable,
       hedgeableUsd: Number(counts.hedgeable_usd),
       priced: priced.c,

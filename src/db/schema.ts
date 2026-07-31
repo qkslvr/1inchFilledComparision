@@ -210,6 +210,16 @@ CREATE TABLE IF NOT EXISTS decided_venue_outcomes (
 );
 CREATE INDEX IF NOT EXISTS idx_decided_venue ON decided_venue_outcomes(venue, cls);
 
+-- Running totals of what retention has deleted, so headline counts survive the
+-- rows they were derived from. Without this, pruning 57k unsupported orders
+-- would silently drop "auctions seen" from 58,000 to 265 and misstate how much
+-- flow was actually observed.
+CREATE TABLE IF NOT EXISTS purged_stats (
+  kind          TEXT PRIMARY KEY,
+  count         BIGINT NOT NULL DEFAULT 0,
+  last_purge_ms BIGINT
+);
+
 -- Resolved ERC-20 symbols. The SQLite dashboard cached these in module memory,
 -- which a serverless reader loses on every cold start; persisting keeps the
 -- unsupported-token table readable instead of a wall of address stubs.

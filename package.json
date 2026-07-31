@@ -22,7 +22,8 @@
     "smoke:bebop": "tsx scripts/smoke-bebop.ts",
     "build:static": "tsx scripts/build-static.ts",
     "backfill:outcomes": "tsx scripts/backfill-outcomes.ts",
-    "compare": "tsx scripts/rate-compare.ts"
+    "compare": "tsx scripts/rate-compare.ts",
+    "prune": "tsx scripts/prune.ts"
   },
   "dependencies": {
     "@1inch/fusion-sdk": "^2.4.10",
