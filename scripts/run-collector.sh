@@ -5,13 +5,18 @@
 # Without supervision a single crash means silence until someone notices — a
 # database disk-full killed both collectors once and went unnoticed for 22 hours.
 #
-#   CHAIN=base bash scripts/run-collector.sh
+#   bash scripts/run-collector.sh base
+#
+# The chain is an argument rather than only an env var so it shows up in the
+# process command line, which is how ensure-collectors.sh tells the two apart.
 #
 # Stop it by killing this wrapper (pkill -f run-collector.sh), not the child:
 # a clean SIGINT to the collector exits 0 and the loop would just restart it.
 set -u
 
-CHAIN="${CHAIN:?set CHAIN=base or CHAIN=ethereum}"
+CHAIN="${1:-${CHAIN:-}}"
+: "${CHAIN:?usage: run-collector.sh <base|ethereum>}"
+export CHAIN
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.local/node/bin:$PATH"
 
