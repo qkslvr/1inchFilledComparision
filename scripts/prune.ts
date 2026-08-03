@@ -36,6 +36,22 @@ console.log(`${dryRun ? 'DRY RUN — ' : ''}pruning ${label}`);
 
 const before = await db.get<{ size: string }>(`SELECT pg_size_pretty(pg_database_size(current_database())) AS size`);
 
+// Normal retention cannot save us from a burst. A burst's ticks belong to orders
+// that are still open, or only just terminated, so nothing makes them eligible
+// for deletion for a whole day — and 140 concurrent orders produce ~6 GB/day.
+// Above a high-water mark, prune much harder: a Fusion auction lasts minutes, so
+// an order still open hours later is one whose terminal status never arrived,
+// and its ticks are the exact backlog that filled the disk twice.
+const MAX_MB = Number(process.env.PRUNE_MAX_MB ?? 350);
+const sizeRow = await db.get<{ mb: number }>(
+  `SELECT (pg_database_size(current_database()) / 1048576)::int AS mb`
+);
+const underPressure = (sizeRow?.mb ?? 0) > MAX_MB;
+const STALE_OPEN_MS = 6 * 3_600_000;
+if (underPressure) {
+  console.log(`  ! ${sizeRow?.mb} MB exceeds PRUNE_MAX_MB=${MAX_MB}: pruning aggressively`);
+}
+
 /** Rows a statement would touch, without touching them. */
 async function countFor(what: string, sql: string): Promise<number> {
   const r = await db.get<{ c: number }>(`SELECT count(*) AS c FROM (${sql}) AS q`);
@@ -57,6 +73,13 @@ const NOISE_ORDERS = `
   WHERE eligible = 0 AND kyber_only = 0 AND received_at_ms < ${cutoff}`;
 const noiseOrders = await countFor('unhedgeable orders (never priced)', NOISE_ORDERS);
 
+// --- 2b. under pressure only: ticks of orders stuck open ------------------
+const STUCK_TICKS = `
+  SELECT t.id FROM ticks t JOIN orders o ON o.order_hash = t.order_hash
+  WHERE o.terminal_status IS NULL
+    AND o.received_at_ms < ${Date.now() - STALE_OPEN_MS}`;
+const stuckTicks = underPressure ? await countFor('ticks of long-stuck open orders', STUCK_TICKS) : 0;
+
 if (dryRun) {
   console.log(`\ncurrent size ${before?.size}. Nothing changed.`);
   await db.close();
@@ -71,6 +94,15 @@ if (deadTicks > 0) {
                   AND o.terminal_status <> 'filled'
                   AND o.terminal_at_ms < ?`, [cutoff]);
   console.log(`  deleted ${deadTicks.toLocaleString('en-US')} ticks`);
+}
+
+if (stuckTicks > 0) {
+  await db.all(
+    `DELETE FROM ticks t USING orders o
+     WHERE o.order_hash = t.order_hash AND o.terminal_status IS NULL AND o.received_at_ms < ?`,
+    [Date.now() - STALE_OPEN_MS]
+  );
+  console.log(`  deleted ${stuckTicks.toLocaleString('en-US')} ticks of long-stuck open orders`);
 }
 
 if (noiseOrders > 0) {
