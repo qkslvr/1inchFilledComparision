@@ -177,12 +177,27 @@ export class Db {
   private closed = false;
   /** statements dropped after both the batch and the per-statement retry failed */
   writeErrors = 0;
+  /** True while the database is close enough to its ceiling that we would rather
+   *  drop telemetry than fill it. A scheduled prune cannot be relied on here: a
+   *  burst adds ~4 MB/minute, faster than any cron interval worth running, and
+   *  a full database stops accepting connections entirely — at which point
+   *  nothing can clean up. This is the backstop that does not depend on timing. */
+  storagePressure = false;
+  /** ticks shed while under storage pressure */
+  droppedTicks = 0;
+  private sizeTimer: NodeJS.Timeout | null = null;
+  private storageLimitMb = Number(process.env.DB_MAX_MB ?? 0);
 
   private constructor(pool: pg.Pool, readonly chainId: number, readonly readonly_: boolean) {
     this.pool = pool;
     if (!readonly_) {
       this.timer = setInterval(() => void this.flush(), FLUSH_MS);
       this.timer.unref();
+      if (this.storageLimitMb > 0) {
+        this.sizeTimer = setInterval(() => void this.checkStorage(), 120_000);
+        this.sizeTimer.unref();
+        void this.checkStorage();
+      }
     }
   }
 
@@ -296,9 +311,32 @@ export class Db {
     return (await this.all<T>(sql, values))[0];
   }
 
+  /** Poll actual database size. Cheap, and the only signal that does not depend
+   *  on a scheduler having run recently enough. */
+  private async checkStorage(): Promise<void> {
+    try {
+      const r = await this.pool.query(`SELECT (pg_database_size(current_database())/1048576)::int AS mb`);
+      const mb = Number(r.rows[0]?.mb ?? 0);
+      const was = this.storagePressure;
+      this.storagePressure = mb > this.storageLimitMb;
+      if (this.storagePressure !== was) {
+        logError(
+          this.storagePressure
+            ? `storage pressure: ${mb} MB over DB_MAX_MB=${this.storageLimitMb}, dropping tick writes until it clears`
+            : `storage pressure cleared: ${mb} MB, resuming tick writes`,
+          null
+        );
+      }
+    } catch {
+      // A failed size check is not itself a reason to stop writing.
+    }
+  }
+
   async close(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    if (this.sizeTimer) clearInterval(this.sizeTimer);
+    this.sizeTimer = null;
     await this.flush();
     this.closed = true;
     await this.pool.end();
@@ -534,6 +572,13 @@ export class Db {
   // --- ticks ---
 
   insertTick(t: TickInsert): void {
+    // Ticks are by far the largest consumer and the only one safe to shed:
+    // losing some degrades the sensitivity analysis, whereas filling the disk
+    // stops collection entirely and has twice taken the dashboard down with it.
+    if (this.storagePressure) {
+      this.droppedTicks++;
+      return;
+    }
     this.enqueue(
       `INSERT INTO ticks (
         order_hash, ts_ms, snapshot_id, snapshot_age_ms, degraded, exclusive, remaining_maker,

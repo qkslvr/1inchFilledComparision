@@ -201,7 +201,8 @@ const status = setInterval(() => {
   }
   log(
     `status: live=${engine.liveCount} ticks/min=${ticksPerMin} samples/min ${sampleBits.join(' ')} ` +
-      `ws=${feed.state} restq=${client.limiter.pending} terminals=${lifecycle.terminalFetches} kyberq=${kyber.quoteCount} bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'}`
+      `ws=${feed.state} restq=${client.limiter.pending} terminals=${lifecycle.terminalFetches} kyberq=${kyber.quoteCount} bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'}` +
+      (db.storagePressure ? ` STORAGE-PRESSURE(${db.droppedTicks} ticks dropped)` : '')
   );
 }, 60_000);
 

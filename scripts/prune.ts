@@ -42,12 +42,19 @@ const before = await db.get<{ size: string }>(`SELECT pg_size_pretty(pg_database
 // Above a high-water mark, prune much harder: a Fusion auction lasts minutes, so
 // an order still open hours later is one whose terminal status never arrived,
 // and its ticks are the exact backlog that filled the disk twice.
-const MAX_MB = Number(process.env.PRUNE_MAX_MB ?? 350);
+// 250, not 350: at the burst rate measured on 29 July (4.1 MB/min) a 350 MB
+// mark leaves 39 minutes before the ceiling, which a cron running any less often
+// than that cannot act inside. 250 leaves ~64 minutes against a 15-minute cron.
+const MAX_MB = Number(process.env.PRUNE_MAX_MB ?? 250);
 const sizeRow = await db.get<{ mb: number }>(
   `SELECT (pg_database_size(current_database()) / 1048576)::int AS mb`
 );
 const underPressure = (sizeRow?.mb ?? 0) > MAX_MB;
-const STALE_OPEN_MS = 6 * 3_600_000;
+// 45 minutes, not 6 hours. A burst fills the disk in under two hours, so its
+// orders are never 6 hours old and that threshold would have matched nothing at
+// exactly the moment it was needed. A Fusion auction runs for minutes, so 45
+// minutes is already far past any order that is going to resolve normally.
+const STALE_OPEN_MS = 45 * 60_000;
 if (underPressure) {
   console.log(`  ! ${sizeRow?.mb} MB exceeds PRUNE_MAX_MB=${MAX_MB}: pruning aggressively`);
 }
