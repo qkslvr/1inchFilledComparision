@@ -1,8 +1,7 @@
 /** Builds decided_outcomes for orders that finished before the collector started
  *  writing verdicts — i.e. everything imported from SQLite.
  *
- *   CHAIN=base     npm run backfill:outcomes
- *   CHAIN=ethereum npm run backfill:outcomes
+ *   npm run backfill:outcomes
  *
  *  Idempotent: only touches orders that have no verdict yet, unless --all. */
 import { config } from '../config.js';

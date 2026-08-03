@@ -1,7 +1,6 @@
 /** One-way import of a collector SQLite file into its Postgres schema.
  *
- *   CHAIN=base     npm run import:sqlite -- ./shadow.sqlite
- *   CHAIN=ethereum npm run import:sqlite -- ./shadow-eth.sqlite
+ *   npm run import:sqlite -- ./shadow-eth.sqlite
  *
  *  Row ids are preserved verbatim. Each chain owns a separate Postgres schema,
  *  so the two files' id spaces never meet and the foreign keys that point at
@@ -55,7 +54,7 @@ const SEQUENCES: Array<{ table: string; column: string }> = [
 const sqlitePath = process.argv[2];
 const force = process.argv.includes('--force');
 if (!sqlitePath || !existsSync(sqlitePath)) {
-  console.error('usage: CHAIN=base npm run import:sqlite -- <path-to.sqlite> [--force]');
+  console.error('usage: npm run import:sqlite -- <path-to.sqlite> [--force]');
   process.exit(1);
 }
 

@@ -5,15 +5,16 @@ Three pieces:
 | Piece | Where | Why there |
 | --- | --- | --- |
 | Collector | A VM you control | Holds two live WebSockets and prices every live order once a second. Nothing serverless can do this. |
-| Postgres | Railway | Shared state between the writer and the reader. |
+| Postgres | Neon | Shared state between the writer and the reader. |
 | Dashboard | Vercel | Static page + one read-only function. |
 
-The collector connects **out** to Railway, so the VM needs no inbound access, no
+The collector connects **out** to Neon, so the VM needs no inbound access, no
 tunnel and no public address.
 
-Each chain lives in its own Postgres schema — `chain_8453` for Base, `chain_1`
-for Ethereum — which is what the SQLite build got from having one file per
-chain. Queries stay unqualified; the connection's `search_path` decides.
+Ethereum is the only chain collected; Base was removed after proving to be
+almost entirely unhedgeable flow. Its data lives in Postgres schema `chain_1`,
+which is what the SQLite build got from having one file per chain. Queries stay
+unqualified; the connection's `search_path` decides.
 
 ## 1. Postgres
 
@@ -32,9 +33,9 @@ Then create a read-only role for Vercel, so a leaked frontend env can't write:
 ```sql
 CREATE ROLE vercel_ro LOGIN PASSWORD '<pick one>';
 GRANT CONNECT ON DATABASE neondb TO vercel_ro;
-GRANT USAGE ON SCHEMA chain_8453, chain_1 TO vercel_ro;
-GRANT SELECT ON ALL TABLES IN SCHEMA chain_8453, chain_1 TO vercel_ro;
-ALTER DEFAULT PRIVILEGES IN SCHEMA chain_8453, chain_1 GRANT SELECT ON TABLES TO vercel_ro;
+GRANT USAGE ON SCHEMA chain_1 TO vercel_ro;
+GRANT SELECT ON ALL TABLES IN SCHEMA chain_1 TO vercel_ro;
+ALTER DEFAULT PRIVILEGES IN SCHEMA chain_1 GRANT SELECT ON TABLES TO vercel_ro;
 ```
 
 Run this *after* the first collector start, which is what creates the schemas.
@@ -43,16 +44,15 @@ Run this *after* the first collector start, which is what creates the schemas.
 
 The WebSocket feed costs nothing per message, but two things spend REST calls:
 one `getOrderStatus` per finished order, and the active-orders poll that runs
-only while the socket is down. `restRatePerSec: 0.5` per collector is set so two
-chains together stay near the ~1 rps ceiling.
+only while the socket is down. `restRatePerSec: 0.5` stays at half the ~1 rps
+ceiling even now that Ethereum is the only chain, because it halves the burn.
 
 That ceiling is not the binding constraint — the plan's **total** request
 allowance is. Two collectors running continuously exhausted a Dev Portal key in
-about a day, and a second key in two, both ending with `429 The request limit
-for your plan has been exceeded`. Sustained two-chain collection needs a paid
-plan; otherwise run one chain, or accept that orders stop reaching a terminal
-status once the allowance is gone (they are still priced, still reaped, but never
-get a verdict).
+about a day, a second in two, and a third in one, each ending with `429 The
+request limit for your plan has been exceeded`. Dropping Base halves the burn.
+When the allowance does run out, orders are still priced and still reaped but
+never reach a terminal status, so they never get a verdict.
 
 ## 2. Collector VM
 
@@ -63,13 +63,12 @@ git clone git@github.com:qkslvr/1inchFilledComparision.git ~/workspace/1inchFill
 cd ~/workspace/1inchFilledComparision
 npm ci --omit=optional          # skips better-sqlite3, only the import script needs it
 cp .env.example .env            # then fill in DATABASE_URL + ONEINCH_API_KEY
-npm run collect                 # Base
-CHAIN=ethereum npm run collect  # Ethereum, second process
+npm run collect                 # Ethereum
 ```
 
 The first start creates and migrates that chain's schema.
 
-As systemd units, one per chain:
+As a systemd unit:
 
 ```ini
 # /etc/systemd/system/shadow-collector@.service
@@ -92,7 +91,7 @@ WantedBy=multi-user.target
 ```
 
 ```bash
-sudo systemctl enable --now shadow-collector@base shadow-collector@ethereum
+sudo systemctl enable --now shadow-collector@ethereum
 ```
 
 Without root, `~/workspace/restart-collectors.sh` does the same job with
@@ -109,7 +108,7 @@ and records a `ws_gap` event covering the downtime.
 
 ### Watching for write lag
 
-Round trip to Railway is ~280ms, so the write queue is the thing to watch if
+Round trip to Neon is ~280ms, so the write queue is the thing to watch if
 collection ever gets much busier. This should stay in single-digit seconds:
 
 ```sql
@@ -127,13 +126,11 @@ Run this from the machine holding the `.sqlite` files (it needs
 read-only and never modified.
 
 ```bash
-export DATABASE_URL='postgres://...'          # Railway public URL
-CHAIN=base     npm run import:sqlite -- ./shadow.sqlite
-CHAIN=ethereum npm run import:sqlite -- ./shadow-eth.sqlite
+export DATABASE_URL='postgres://...'   # Neon DIRECT endpoint
+npm run import:sqlite -- ./shadow-eth.sqlite
 
 # build the verdicts the dashboard reads (imported history has none)
-CHAIN=base     npm run backfill:outcomes
-CHAIN=ethereum npm run backfill:outcomes
+npm run backfill:outcomes
 ```
 
 `import:sqlite` refuses to run against a schema that already holds orders unless
@@ -149,11 +146,10 @@ page's fetch stays same-origin.
 
 Set one environment variable:
 
-- `DATABASE_URL` — the Railway public URL **using the `vercel_ro` role**
+- `DATABASE_URL` — the Neon **direct** endpoint using the `vercel_ro` role
 
 The function caches for 4 seconds at the edge (`s-maxage=4`) against a 5-second
-poll, so extra open tabs don't multiply into connection pressure. Railway ships
-no pgBouncer, so the pool is capped at one connection per instance.
+poll, so extra open tabs don't multiply into connection pressure.
 
 ## Local dashboard
 
@@ -169,5 +165,26 @@ Unchanged, still a CLI, still writes `report.md` / `report.json` next to the
 repo:
 
 ```bash
-CHAIN=base npm run report
+npm run report
 ```
+
+## 5. Keeping it alive and inside the storage ceiling
+
+Three cron entries, all running as the collector user (no root needed):
+
+```
+*/5 * * * *        scripts/ensure-collectors.sh    # restarts a dead collector
+8,23,38,53 * * * * npm run prune                   # retention
+```
+
+`ensure-collectors.sh` exists because a crash is not the only way to lose a
+collector: a host-level stop killed the process group, supervisor included, and
+nothing noticed for 19 hours.
+
+Retention keeps filled orders and their venue prices and drops everything else
+after a day. It is not sufficient on its own — a burst adds ~4 MB/min, faster
+than any cron interval, and a *full* database refuses connections so no cleanup
+can run at all. So the collector also polls its own size every two minutes and
+sheds tick writes above `DB_MAX_MB`, reporting `STORAGE-PRESSURE` on its status
+line. Ticks are the only thing safe to shed: losing some costs the sensitivity
+analysis, filling the disk costs everything.

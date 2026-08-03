@@ -32,41 +32,12 @@ interface ChainProfile {
   reportCaveats: string[];
 }
 
-const WETH_BASE = '0x4200000000000000000000000000000000000006';
-const USDC_BASE = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
-const CBBTC_BASE = '0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf';
 
 const WETH_ETHEREUM = '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2';
 const USDC_ETHEREUM = '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48';
 const WBTC_ETHEREUM = '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599';
 
 const profiles: Record<string, ChainProfile> = {
-  base: {
-    chainId: 8453,
-    label: 'Base',
-    wethAddress: WETH_BASE,
-    pairs: [
-      {
-        ticker: 'ETH_USDC',
-        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_BASE, NATIVE_SENTINEL] },
-        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_BASE] },
-      },
-      {
-        // KalqiX URL ticker is case-sensitive: /v1/markets/cbBTC_USDC/order-book
-        ticker: 'cbBTC_USDC',
-        base: { symbol: 'cbBTC', decimals: 8, addresses: [CBBTC_BASE] },
-        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_BASE] },
-      },
-    ],
-    rpcEnvVar: 'BASE_RPC_URL',
-    rpcUrlDefault: 'https://mainnet.base.org',
-    dashPortDefault: 8787,
-    kyberChainSlug: 'base',
-    // USDbC<->USDC rotation: measured at ~17 bps underwater after fees, and it
-    // floods the kyber-only slots. Recorded as unsupported volume only.
-    kyberOnlySkipPairs: [['0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca', USDC_BASE]],
-    reportCaveats: [],
-  },
   ethereum: {
     chainId: 1,
     label: 'Ethereum',
@@ -99,10 +70,10 @@ profiles.eth = profiles.ethereum!;
 
 // `||`, not `??`: .env.example ships CHAIN= as an empty placeholder, and the
 // loader above turns that into '' rather than leaving it unset.
-const chainName = (process.env.CHAIN || 'base').toLowerCase();
+const chainName = (process.env.CHAIN || 'ethereum').toLowerCase();
 const profile = profiles[chainName];
 if (!profile) {
-  throw new Error(`unknown CHAIN "${chainName}" (expected: base, ethereum)`);
+  throw new Error(`unknown CHAIN "${chainName}" (expected: ethereum)`);
 }
 
 /** unordered-pair keys ("a|b", lowercase-sorted) for the kyber-only skip list */
@@ -138,13 +109,16 @@ export const config = {
   kalqixApiBase: 'https://api.kalqix.com/v1',
   baseRpcUrl: process.env[profile.rpcEnvVar] || profile.rpcUrlDefault,
   reportCurrency: 'USDC',
-  /** Half the Dev Portal ~1 rps budget: two per-chain collectors share one API key. */
+  /** Half the Dev Portal ~1 rps budget. Kept at half now that Ethereum is the
+   *  only chain: the binding limit turned out to be the plan's total request
+   *  allowance, not its rate, and three keys were exhausted in a week. Running
+   *  one collector at this rate halves the burn rather than doubling throughput. */
   restRatePerSec: 0.5,
   restBurst: 2,
   activePollFallbackMs: 5000,
   /** force-reconnect a "connected" 1inch WS that has delivered nothing for this
-   *  long (silent TCP death has no close event; Base flow makes 5 min of true
-   *  silence implausible, and a spurious reconnect costs ~2 REST calls) */
+   *  long (silent TCP death has no close event; Ethereum flow makes 5 min of
+   *  true silence implausible, and a spurious reconnect costs ~2 REST calls) */
   wsStaleMs: 300_000,
   /** Terminal-status fetch grace after order deadline. */
   reapGraceMs: 60_000,
@@ -202,7 +176,7 @@ export interface ResolvedChain {
   rpcUrl: string;
 }
 
-export const allChains: ResolvedChain[] = ['base', 'ethereum'].map((key) => {
+export const allChains: ResolvedChain[] = ['ethereum'].map((key) => {
   const p = profiles[key]!;
   return {
     key,

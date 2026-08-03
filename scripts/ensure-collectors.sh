@@ -14,7 +14,7 @@ cd "$(dirname "$0")/.."
 export PATH="$HOME/.local/node/bin:$PATH"
 mkdir -p logs
 
-for chain in base ethereum; do
+for chain in ethereum; do
   # The chain is an argument to run-collector.sh, so it appears in the command
   # line. The bracket keeps this pattern from matching the script's own cmdline.
   if pgrep -f "run-collecto[r].sh $chain" > /dev/null 2>&1; then

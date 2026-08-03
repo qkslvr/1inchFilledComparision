@@ -1,5 +1,5 @@
-/** Postgres schema. Each chain gets its own Postgres *schema* (chain_8453,
- *  chain_1), which reproduces the SQLite build's one-file-per-chain isolation:
+/** Postgres schema. The chain gets its own Postgres *schema* (chain_1), which
+ *  reproduces the SQLite build's one-file-per-chain isolation:
  *  every query stays unqualified and unfiltered, the search_path decides which
  *  chain it hits, and the id sequences never collide across chains.
  *

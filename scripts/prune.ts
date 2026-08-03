@@ -1,8 +1,8 @@
 /** Retention. Keeps what the research needs — filled orders and the venue
  *  prices we fetched — and drops what only costs space.
  *
- *   CHAIN=base npm run prune              # apply
- *   CHAIN=base npm run prune -- --dry-run # report what would go
+ *   npm run prune              # apply
+ *   npm run prune -- --dry-run # report what would go
  *
  *  What is kept forever:
  *    - every decided_outcomes / decided_venue_outcomes row. These are the
