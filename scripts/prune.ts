@@ -24,7 +24,10 @@ import { config } from '../config.js';
 import { Db } from '../src/db/db.js';
 
 const dryRun = process.argv.includes('--dry-run');
-const KEEP_DAYS = Number(process.env.PRUNE_KEEP_DAYS ?? 3);
+// One day, not three. Expired orders are ~86% of all ticks, and at the observed
+// ingest rate a three-day window let the database reach its ceiling before any
+// of it became eligible for deletion — the retention never got to run.
+const KEEP_DAYS = Number(process.env.PRUNE_KEEP_DAYS ?? 1);
 const cutoff = Date.now() - KEEP_DAYS * 86_400_000;
 
 const db = await Db.open(config.chainId);

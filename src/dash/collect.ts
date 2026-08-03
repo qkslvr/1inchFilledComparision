@@ -130,7 +130,12 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
               t.edge_default, t.edge_kyber, t.edge_bebop, t.degraded, t.kyber_degraded, t.bebop_degraded,
               t.insufficient_depth, t.notional_taker, t.notional_usdc
        FROM orders o
-       LEFT JOIN ticks t ON t.id = (SELECT MAX(id) FROM ticks WHERE order_hash = o.order_hash)
+       -- LATERAL over idx_ticks_order(order_hash, ts_ms DESC). The old form
+       -- selected MAX(id), which needed a second index on order_hash purely to
+       -- stay fast, and that index cost more than the ticks table itself.
+       LEFT JOIN LATERAL (
+         SELECT * FROM ticks WHERE order_hash = o.order_hash ORDER BY ts_ms DESC LIMIT 1
+       ) t ON true
        WHERE (o.eligible = 1 OR o.kyber_only = 1) AND o.terminal_status IS NULL
        ORDER BY o.received_at_ms DESC LIMIT 100`
     ) as Promise<Array<Record<string, any>>>,

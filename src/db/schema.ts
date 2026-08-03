@@ -160,8 +160,12 @@ CREATE TABLE IF NOT EXISTS ticks (
   bebop_fee        TEXT,
   edge_bebop       TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_ticks_order ON ticks(order_hash, ts_ms);
-CREATE INDEX IF NOT EXISTS idx_ticks_order_id ON ticks(order_hash, id DESC);
+-- One index, not two. order_hash is a 66-character string, so every index on it
+-- costs ~100 bytes a row; a second one made the ticks indexes larger than the
+-- ticks themselves (194 MB against 191 MB of data). Anything that wanted the
+-- latest tick for an order can order by ts_ms here instead of by id.
+CREATE INDEX IF NOT EXISTS idx_ticks_order ON ticks(order_hash, ts_ms DESC);
+DROP INDEX IF EXISTS idx_ticks_order_id;
 
 CREATE TABLE IF NOT EXISTS gas_samples (
   ts_ms         BIGINT PRIMARY KEY,
