@@ -43,12 +43,16 @@ export function toPg(sql: string): string {
 }
 
 function sslFor(url: string): pg.ConnectionConfig['ssl'] {
-  // Local and Railway-internal traffic is unencrypted by design.
+  // Loopback and Railway-internal traffic is unencrypted by design.
   if (/sslmode=disable/.test(url) || /\.railway\.internal/.test(url)) return false;
-  // Railway's public proxy presents a cert that doesn't chain to a public root,
-  // so it is the one host we can't verify. Everything else (Neon included) does
-  // chain, and gets verified.
-  if (/\.rlwy\.net/.test(url) || /\.railway\.app/.test(url)) return { rejectUnauthorized: false };
+  // Encrypt, but don't verify the peer. Needed for a self-signed cert — our own
+  // Postgres on the VM — and for Railway's proxy, whose cert doesn't chain to a
+  // public root. Opt in explicitly per URL so this can never be the silent
+  // default: it stops an eavesdropper reading the traffic but not an active
+  // man-in-the-middle, which matters once the port is open to the internet.
+  if (/sslmode=no-verify/.test(url) || /\.rlwy\.net/.test(url) || /\.railway\.app/.test(url)) {
+    return { rejectUnauthorized: false };
+  }
   return { rejectUnauthorized: true };
 }
 

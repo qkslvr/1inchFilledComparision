@@ -42,10 +42,13 @@ const before = await db.get<{ size: string }>(`SELECT pg_size_pretty(pg_database
 // Above a high-water mark, prune much harder: a Fusion auction lasts minutes, so
 // an order still open hours later is one whose terminal status never arrived,
 // and its ticks are the exact backlog that filled the disk twice.
-// 250, not 350: at the burst rate measured on 29 July (4.1 MB/min) a 350 MB
+// 150 now that Postgres shares the VM's root filesystem with everything else
+// on the box: the budget is no longer a dedicated 512 MB volume but ~785 MB of
+// free disk that MySQL and four other services also depend on.
+// Previously 250, not 350: at the burst rate measured on 29 July (4.1 MB/min) a 350 MB
 // mark leaves 39 minutes before the ceiling, which a cron running any less often
 // than that cannot act inside. 250 leaves ~64 minutes against a 15-minute cron.
-const MAX_MB = Number(process.env.PRUNE_MAX_MB ?? 250);
+const MAX_MB = Number(process.env.PRUNE_MAX_MB ?? 150);
 const sizeRow = await db.get<{ mb: number }>(
   `SELECT (pg_database_size(current_database()) / 1048576)::int AS mb`
 );
