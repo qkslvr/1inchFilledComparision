@@ -13,6 +13,7 @@ const VENUES: Array<{ venue: Venue; name: string }> = [
   { venue: 'kalqix', name: 'KalqiX order book' },
   { venue: 'kyber', name: 'Kyber aggregator' },
   { venue: 'bebop', name: 'Bebop market makers' },
+  { venue: 'pancake', name: 'PancakeSwap V3' },
 ];
 
 interface Chip {
@@ -127,7 +128,7 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
     db.all(
       `SELECT o.order_hash, o.pair, o.kyber_only, o.maker_asset, o.taker_asset,
               o.auction_start_ms, o.auction_duration_s, o.deadline_ms,
-              t.edge_default, t.edge_kyber, t.edge_bebop, t.degraded, t.kyber_degraded, t.bebop_degraded,
+              t.edge_default, t.edge_kyber, t.edge_bebop, t.edge_pancake, t.degraded, t.kyber_degraded, t.bebop_degraded, t.pancake_degraded,
               t.insufficient_depth, t.notional_taker, t.notional_usdc
        FROM orders o
        -- LATERAL over idx_ticks_order(order_hash, ts_ms DESC). The old form
@@ -230,6 +231,7 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
       kalqix: o.kyber_only === 1 ? NO_MARKET : kalqixChip,
       kyber: liveChip(o.edge_kyber, o.notional_taker, o.kyber_degraded === 1),
       bebop: liveChip(o.edge_bebop, o.notional_taker, o.bebop_degraded === 1),
+      pancake: liveChip(o.edge_pancake, o.notional_taker, o.pancake_degraded === 1),
       expires: o.deadline_ms !== null ? `${Math.max(0, Math.round((o.deadline_ms - now) / 60000))} min` : '?',
     };
   });
@@ -251,6 +253,7 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
         kalqix: { kind: 'none', text: 'no data' } as Chip,
         kyber: { kind: 'none', text: 'no data' } as Chip,
         bebop: { kind: 'none', text: 'no data' } as Chip,
+        pancake: { kind: 'none', text: 'no data' } as Chip,
       };
       decidedByHash.set(r.order_hash, entry);
     }

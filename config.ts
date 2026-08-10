@@ -17,7 +17,7 @@ export const NATIVE_SENTINEL = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 interface ChainProfile {
   chainId: number;
   label: string;
-  /** canonical wrapped-ETH address, for hedge_asset_kind bookkeeping */
+  /** canonical wrapped-native address (WETH, WBNB), for hedge_asset_kind bookkeeping */
   wethAddress: string;
   pairs: PairConfig[];
   rpcEnvVar: string;
@@ -25,6 +25,22 @@ interface ChainProfile {
   dashPortDefault: number;
   /** KyberSwap aggregator chain slug */
   kyberChainSlug: string;
+  /** Whether KalqiX quotes this chain. False means: don't sample its order
+   *  books, leave the kalqix tick columns null — but still treat the configured
+   *  pairs as fully tracked. Without this an entire chain would fall through to
+   *  the kyber-only path, which is capped at four concurrent orders. */
+  hasKalqix: boolean;
+  /** pair ticker whose mid prices the gas asset, e.g. ETH_USDC or BNB_USDT */
+  nativeTicker: string;
+  /** symbol of the gas asset, and of the stable everything converts through */
+  nativeSymbol: string;
+  stableSymbol: string;
+  /** Bebop stream slug, where it differs from the Kyber one. */
+  bebopChainSlug?: string;
+  /** PancakeSwap V3 QuoterV2, on chains where it is deployed. */
+  pancakeQuoter?: string;
+  /** PancakeSwap V3 fee tiers, in hundredths of a bip. */
+  pancakeFees?: number[];
   /** token pairs (unordered) excluded from kyber-only tracking, e.g. dull
    *  stable rotations that would hog the quote slots */
   kyberOnlySkipPairs: Array<[string, string]>;
@@ -36,6 +52,16 @@ interface ChainProfile {
 const WETH_ETHEREUM = '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2';
 const USDC_ETHEREUM = '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48';
 const WBTC_ETHEREUM = '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599';
+
+// BNB Chain. Note the decimals: unlike Ethereum, USDT and USDC here are 18dp,
+// and BTCB is 18dp rather than WBTC's 8. Copying the Ethereum profile's
+// decimals would put every USD figure out by a factor of 10^12.
+const WBNB = '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c';
+const USDT_BSC = '0x55d398326f99059ff775485246999027b3197955';
+const BTCB_BSC = '0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c';
+const ETH_BSC = '0x2170ed0880ac9a755fd29b2688956bd959f933f8';
+/** PancakeSwap deploys its V3 QuoterV2 at the same address on every chain. */
+const PANCAKE_QUOTER = '0xb048bbc1ee6b733fffcfb9e9cef7375518e25997';
 
 const profiles: Record<string, ChainProfile> = {
   ethereum: {
@@ -59,21 +85,67 @@ const profiles: Record<string, ChainProfile> = {
     rpcUrlDefault: 'https://ethereum-rpc.publicnode.com',
     dashPortDefault: 8788,
     kyberChainSlug: 'ethereum',
+    hasKalqix: true,
+    nativeTicker: 'ETH_USDC',
+    nativeSymbol: 'ETH',
+    stableSymbol: 'USDC',
     kyberOnlySkipPairs: [],
     reportCaveats: [
       'Orders are on Ethereum but the hedge venue (KalqiX) settles on Base; cross-chain inventory and rebalancing costs are ignored. This measures pricing headroom only.',
       'WBTC is hedged on the cbBTC order book. Unlike WETH and native ETH, WBTC and cbBTC are different custodial wrappers; the wrapper basis is ignored.',
     ],
   },
+  bsc: {
+    chainId: 56,
+    label: 'BNB Chain',
+    wethAddress: WBNB,
+    pairs: [
+      {
+        ticker: 'BNB_USDT',
+        base: { symbol: 'BNB', decimals: 18, addresses: [WBNB, NATIVE_SENTINEL] },
+        quote: { symbol: 'USDT', decimals: 18, addresses: [USDT_BSC] },
+      },
+      {
+        ticker: 'BTCB_USDT',
+        base: { symbol: 'BTCB', decimals: 18, addresses: [BTCB_BSC] },
+        quote: { symbol: 'USDT', decimals: 18, addresses: [USDT_BSC] },
+      },
+      {
+        ticker: 'ETH_USDT',
+        base: { symbol: 'ETH', decimals: 18, addresses: [ETH_BSC] },
+        quote: { symbol: 'USDT', decimals: 18, addresses: [USDT_BSC] },
+      },
+    ],
+    rpcEnvVar: 'BSC_RPC_URL',
+    rpcUrlDefault: 'https://bsc-dataseed.binance.org',
+    dashPortDefault: 8789,
+    kyberChainSlug: 'bsc',
+    // KalqiX quotes no BNB Chain market. Its columns stay null and its card on
+    // the dashboard reads "no data"; the venues that matter here are Kyber,
+    // PancakeSwap and Bebop.
+    hasKalqix: false,
+    nativeTicker: 'BNB_USDT',
+    nativeSymbol: 'BNB',
+    stableSymbol: 'USDT',
+    bebopChainSlug: 'bsc',
+    pancakeQuoter: PANCAKE_QUOTER,
+    pancakeFees: [100, 500, 2500, 10000],
+    kyberOnlySkipPairs: [],
+    reportCaveats: [
+      'KalqiX quotes no BNB Chain market, so its column is empty throughout; the venue comparison here is Kyber against PancakeSwap against Bebop.',
+      'USDT on BNB Chain is 18-decimal, unlike the 6-decimal USDC used on Ethereum. USD figures are converted accordingly but are not directly comparable line-for-line with the Ethereum report.',
+    ],
+  },
 };
 profiles.eth = profiles.ethereum!;
+profiles.bnb = profiles.bsc!;
 
 // `||`, not `??`: .env.example ships CHAIN= as an empty placeholder, and the
 // loader above turns that into '' rather than leaving it unset.
 const chainName = (process.env.CHAIN || 'ethereum').toLowerCase();
 const profile = profiles[chainName];
 if (!profile) {
-  throw new Error(`unknown CHAIN "${chainName}" (expected: ethereum)`);
+  throw new Error(`unknown CHAIN "${chainName}" (expected: ethereum, bsc)`);
 }
 
 /** unordered-pair keys ("a|b", lowercase-sorted) for the kyber-only skip list */
@@ -88,6 +160,12 @@ export function isKyberOnlySkipped(makerAsset: string, takerAsset: string): bool
 export const config = {
   chainId: profile.chainId,
   chainLabel: profile.label,
+  hasKalqix: profile.hasKalqix,
+  nativeTicker: profile.nativeTicker,
+  nativeSymbol: profile.nativeSymbol,
+  stableSymbol: profile.stableSymbol,
+  pancakeQuoter: profile.pancakeQuoter ?? null,
+  pancakeFees: profile.pancakeFees ?? [],
   wethAddress: profile.wethAddress,
   pairs: profile.pairs,
   reportCaveats: profile.reportCaveats,
@@ -108,7 +186,7 @@ export const config = {
   oneInchWsBase: 'https://api.1inch.dev/fusion/ws',
   kalqixApiBase: 'https://api.kalqix.com/v1',
   baseRpcUrl: process.env[profile.rpcEnvVar] || profile.rpcUrlDefault,
-  reportCurrency: 'USDC',
+  reportCurrency: profile.stableSymbol,
   /** Half the Dev Portal ~1 rps budget. Kept at half now that Ethereum is the
    *  only chain: the binding limit turned out to be the plan's total request
    *  allowance, not its rate, and three keys were exhausted in a week. Running
@@ -129,7 +207,7 @@ export const config = {
   bebop: {
     wsBase: 'wss://api.bebop.xyz/pmm',
     restBase: 'https://api.bebop.xyz/pmm',
-    chainSlug: profile.kyberChainSlug, // bebop uses the same slugs (base, ethereum)
+    chainSlug: profile.bebopChainSlug ?? profile.kyberChainSlug,
     /** our assumed markup on a Bebop-hedged fill */
     feeBps: 3n,
     /** settlement tx gas for an RFQ self-execution fill */
@@ -138,6 +216,12 @@ export const config = {
     degradedAgeMs: 5000,
     /** the stream is chatty (all pairs, sub-second); a minute of silence = dead socket */
     staleReconnectMs: 60_000,
+  },
+  pancake: {
+    /** our assumed markup on a PancakeSwap-hedged fill, same basis as the others */
+    feeBps: 3n,
+    /** a tick using a quote older than this, or for a stale size, is degraded */
+    degradedQuoteAgeMs: 5000,
   },
   kyber: {
     apiBase: 'https://aggregator-api.kyberswap.com',
@@ -176,7 +260,7 @@ export interface ResolvedChain {
   rpcUrl: string;
 }
 
-export const allChains: ResolvedChain[] = ['ethereum'].map((key) => {
+export const allChains: ResolvedChain[] = ['ethereum', 'bsc'].map((key) => {
   const p = profiles[key]!;
   return {
     key,

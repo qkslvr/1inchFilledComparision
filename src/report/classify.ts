@@ -1,6 +1,6 @@
 import { mulDivCeil } from '../pricing/units.js';
 
-export type Venue = 'kalqix' | 'kyber' | 'bebop';
+export type Venue = 'kalqix' | 'kyber' | 'bebop' | 'pancake';
 
 /** Raw tick row (SQLite column names) -> venue-specific TickData for classify().
  *  KalqiX: book-walk proceeds, venue taker fee, fill gas.
@@ -33,6 +33,20 @@ export function tickForVenue(t: Record<string, any>, venue: Venue): TickData {
       hedgeProceeds: hasData ? BigInt(t.bebop_out) : null,
       gasCostRaw: hasData ? BigInt(t.gas_cost_raw) + BigInt(t.bebop_gas_cost) : base.gasCostRaw,
       feeCost: hasData && t.bebop_fee !== null ? BigInt(t.bebop_fee) : null,
+    };
+  }
+  if (venue === 'pancake') {
+    const hasQuote = t.pancake_out !== null && t.pancake_out !== undefined && t.pancake_gas_cost !== null;
+    return {
+      ...base,
+      degraded: t.pancake_degraded === 1,
+      // Every tier reverting is the venue saying it cannot fill this size, the
+      // same finding the Bebop walk reports when it runs out of depth.
+      insufficientDepth:
+        t.pancake_age_ms !== null && t.pancake_age_ms !== undefined && !hasQuote,
+      hedgeProceeds: hasQuote ? BigInt(t.pancake_out) : null,
+      gasCostRaw: hasQuote ? BigInt(t.gas_cost_raw) + BigInt(t.pancake_gas_cost) : base.gasCostRaw,
+      feeCost: hasQuote && t.pancake_fee !== null ? BigInt(t.pancake_fee) : null,
     };
   }
   const hasQuote = t.kyber_out !== null && t.kyber_out !== undefined && t.kyber_gas_cost !== null;

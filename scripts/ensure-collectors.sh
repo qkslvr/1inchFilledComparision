@@ -25,7 +25,7 @@ if ! pgrep -f "tsx src/dash/mai[n].ts" > /dev/null 2>&1; then
   sleep 2
 fi
 
-for chain in ethereum; do
+for chain in ethereum bsc; do
   # The chain is an argument to run-collector.sh, so it appears in the command
   # line. The bracket keeps this pattern from matching the script's own cmdline.
   if pgrep -f "run-collecto[r].sh $chain" > /dev/null 2>&1; then

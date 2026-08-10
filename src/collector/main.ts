@@ -9,6 +9,7 @@ import { kalqixCreds } from '../kalqix/auth.js';
 import { PricingEngine } from '../pricing/engine.js';
 import { KyberQuoter } from '../kyber/quoter.js';
 import { BebopFeed } from '../bebop/feed.js';
+import { PancakeQuoter } from '../pancake/quoter.js';
 import { Lifecycle } from './lifecycle.js';
 import { TokenResolver } from './tokens-job.js';
 import { log, logError } from '../log.js';
@@ -41,7 +42,9 @@ try {
 
 // --- KalqiX account: effective taker fee + deepest working book source ---
 let takerFeePpm = config.kalqixTakerFeeBps * 100n;
-if (kalqixCreds()) {
+if (!config.hasKalqix) {
+  log(`kalqix quotes no ${config.chainLabel} market; its columns stay empty and its book is not sampled`);
+} else if (kalqixCreds()) {
   try {
     const fees = await fetchMyFees();
     takerFeePpm = fees.takerPpm;
@@ -53,7 +56,9 @@ if (kalqixCreds()) {
   log(`kalqix creds not set, using config taker fee ${takerFeePpm} ppm`);
 }
 db.event(runId, 'fee_schedule', { takerFeePpm: takerFeePpm.toString(), source: kalqixCreds() ? 'account' : 'config' });
-const { fetcher: bookFetcher, source: bookSource } = await chooseBookFetcher(log);
+const { fetcher: bookFetcher, source: bookSource } = config.hasKalqix
+  ? await chooseBookFetcher(log)
+  : { fetcher: undefined, source: 'none' };
 db.event(runId, 'book_source', { source: bookSource });
 
 // --- shared services ---
@@ -62,12 +67,16 @@ const gas = new GasPoller(
   () => db.event(runId, 'rpc_error', { source: 'gas_poll' })
 );
 const refPrices = new RefPriceLoop(db);
-const samplers = new Map<string, Sampler>(
-  config.pairs.map((p) => [p.ticker, new Sampler(p.ticker, db, () => runId, bookFetcher)])
-);
+// No samplers on a chain KalqiX does not quote: the engine then sees no
+// snapshot, leaves the kalqix tick columns null, and the venue simply reads
+// "no data" rather than erroring once a second against a missing market.
+const samplers = config.hasKalqix
+  ? new Map<string, Sampler>(config.pairs.map((p) => [p.ticker, new Sampler(p.ticker, db, () => runId, bookFetcher)]))
+  : new Map<string, Sampler>();
 const kyber = new KyberQuoter(() => db.event(runId, 'kyber_429', {}));
 const bebop = new BebopFeed((kind) => db.event(runId, kind, {}));
-const engine = new PricingEngine(db, samplers, refPrices, gas, () => skewMs, () => runId, takerFeePpm, kyber, bebop);
+const pancake = new PancakeQuoter();
+const engine = new PricingEngine(db, samplers, refPrices, gas, () => skewMs, () => runId, takerFeePpm, kyber, bebop, pancake);
 const lifecycle = new Lifecycle(db, client, engine, () => runId, refPrices);
 const tokenResolver = new TokenResolver(db, config.baseRpcUrl);
 
@@ -75,6 +84,7 @@ tokenResolver.start();
 await gas.start();
 await refPrices.start();
 kyber.start();
+pancake.start();
 await bebop.start();
 engine.start();
 
@@ -201,7 +211,7 @@ const status = setInterval(() => {
   }
   log(
     `status: live=${engine.liveCount} ticks/min=${ticksPerMin} samples/min ${sampleBits.join(' ')} ` +
-      `ws=${feed.state} restq=${client.limiter.pending} terminals=${lifecycle.terminalFetches} kyberq=${kyber.quoteCount} bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'}` +
+      `ws=${feed.state} restq=${client.limiter.pending} terminals=${lifecycle.terminalFetches} kyberq=${kyber.quoteCount} pcs=${pancake.enabled ? pancake.quoteCount : 'off'} bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'}` +
       (db.storagePressure ? ` STORAGE-PRESSURE(${db.droppedTicks} ticks dropped)` : '')
   );
 }, 60_000);
@@ -219,6 +229,7 @@ process.on('SIGINT', () => {
   engine.stop();
   kyber.stop();
   bebop.stop();
+  pancake.stop();
   tokenResolver.stop();
   lifecycle.stop();
   stopPollFallback();

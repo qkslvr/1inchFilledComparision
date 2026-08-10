@@ -1,6 +1,7 @@
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { config } from '../../config.js';
-import type { ParsedBook, SnapshotRecord } from '../types.js';
+import { config, NATIVE_SENTINEL } from '../../config.js';
+import { pancakeSpot } from '../pancake/quoter.js';
+import type { PairConfig, ParsedBook, SnapshotRecord } from '../types.js';
 import type { Db } from '../db/db.js';
 import { fetchOrderBook, KalqixRateLimitError, type BookFetcher } from './client.js';
 import { bestAsk, bestBid, depthBase, mid } from './book.js';
@@ -128,15 +129,33 @@ export class RefPriceLoop {
     for (const pair of config.pairs) {
       if (this.stopped) return;
       try {
-        const { book, receivedAtMs } = await fetchOrderBook(pair.ticker, 1);
-        const m = mid(book);
-        if (m !== null && !this.stopped) {
-          this.latestMid.set(pair.ticker, { tsMs: receivedAtMs, mid: m });
-          this.db.insertRefPrice(pair.ticker, receivedAtMs, m);
+        // Chains KalqiX doesn't quote have no book to take a mid from, so the
+        // on-chain DEX prices the pair instead. Gas conversion is the only
+        // consumer, and it needs a number for every chain.
+        const priced = config.hasKalqix
+          ? await this.kalqixMid(pair.ticker)
+          : await this.onchainMid(pair);
+        if (priced !== null && !this.stopped) {
+          this.latestMid.set(pair.ticker, priced);
+          this.db.insertRefPrice(pair.ticker, priced.tsMs, priced.mid);
         }
       } catch (err) {
         logError(`ref price ${pair.ticker} failed`, err);
       }
     }
+  }
+
+  private async kalqixMid(ticker: string): Promise<{ tsMs: number; mid: bigint } | null> {
+    const { book, receivedAtMs } = await fetchOrderBook(ticker, 1);
+    const m = mid(book);
+    return m === null ? null : { tsMs: receivedAtMs, mid: m };
+  }
+
+  private async onchainMid(pair: PairConfig): Promise<{ tsMs: number; mid: bigint } | null> {
+    const baseAddr = pair.base.addresses.find((a) => a !== NATIVE_SENTINEL) ?? pair.base.addresses[0];
+    const quoteAddr = pair.quote.addresses[0];
+    if (!baseAddr || !quoteAddr) return null;
+    const m = await pancakeSpot(baseAddr, quoteAddr, pair.base.decimals);
+    return m === null ? null : { tsMs: Date.now(), mid: m };
   }
 }

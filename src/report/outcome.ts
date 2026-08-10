@@ -7,7 +7,7 @@ import type { DecidedOutcomeInsert, VenueOutcomeInsert } from '../db/db.js';
 import { classify, tickForVenue, type Venue } from './classify.js';
 import { toFloat } from '../pricing/units.js';
 
-export const VENUES: Venue[] = ['kalqix', 'kyber', 'bebop'];
+export const VENUES: Venue[] = ['kalqix', 'kyber', 'bebop', 'pancake'];
 
 /** Columns classify() needs; kept next to the builder that consumes them. */
 // bebop_age_ms is selected because tickForVenue needs it to tell "the book was
@@ -16,7 +16,8 @@ export const VENUES: Venue[] = ['kalqix', 'kyber', 'bebop'];
 export const OUTCOME_TICK_SQL = `SELECT ts_ms, degraded, exclusive, insufficient_depth, hedge_proceeds,
   auction_cost, gas_cost_raw, fee_cost, notional_taker, notional_usdc,
   kyber_out, kyber_degraded, kyber_gas_cost, kyber_fee,
-  bebop_out, bebop_age_ms, bebop_degraded, bebop_gas_cost, bebop_fee
+  bebop_out, bebop_age_ms, bebop_degraded, bebop_gas_cost, bebop_fee,
+  pancake_out, pancake_age_ms, pancake_degraded, pancake_gas_cost, pancake_fee
   FROM ticks WHERE order_hash = ? ORDER BY ts_ms`;
 
 export const OUTCOME_ORDER_SQL = `SELECT order_hash, pair, terminal_status, terminal_at_ms,

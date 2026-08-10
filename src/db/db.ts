@@ -136,6 +136,13 @@ export interface TickInsert {
   bebopGasCost: bigint | null;
   bebopFee: bigint | null;
   edgeBebop: bigint | null;
+  pancakeOut: bigint | null;
+  pancakeAgeMs: number | null;
+  pancakeDegraded: boolean | null;
+  pancakeGasCost: bigint | null;
+  pancakeFee: bigint | null;
+  pancakeTier: number | null;
+  edgePancake: bigint | null;
 }
 
 export interface VenueOutcomeInsert {
@@ -487,6 +494,18 @@ export class Db {
     this.enqueue(`UPDATE orders SET max_edge_bebop = ? WHERE order_hash = ?`, [s(edge), orderHash]);
   }
 
+  setShadowPancake(orderHash: string, tsMs: number, edge: bigint): void {
+    this.enqueue(
+      `UPDATE orders SET t_shadow_pancake_ms = ?, t_shadow_pancake_edge = ?
+       WHERE order_hash = ? AND t_shadow_pancake_ms IS NULL`,
+      [tsMs, s(edge), orderHash]
+    );
+  }
+
+  setMaxEdgePancake(orderHash: string, edge: bigint): void {
+    this.enqueue(`UPDATE orders SET max_edge_pancake = ? WHERE order_hash = ?`, [s(edge), orderHash]);
+  }
+
   setActualWsTime(orderHash: string, tsMs: number): void {
     this.enqueue(
       `UPDATE orders SET t_actual_ws_ms = ? WHERE order_hash = ? AND t_actual_ws_ms IS NULL`,
@@ -590,8 +609,9 @@ export class Db {
         base_fee_wei, gas_price_wei, fee_cost, notional_taker, notional_usdc, edge_default,
         partial_best_qty, partial_best_edge,
         kyber_out, kyber_amount_in, kyber_quote_age_ms, kyber_degraded, kyber_gas_cost, kyber_fee, edge_kyber,
-        bebop_out, bebop_age_ms, bebop_degraded, bebop_gas_cost, bebop_fee, edge_bebop
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        bebop_out, bebop_age_ms, bebop_degraded, bebop_gas_cost, bebop_fee, edge_bebop,
+        pancake_out, pancake_age_ms, pancake_degraded, pancake_gas_cost, pancake_fee, pancake_tier, edge_pancake
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         t.orderHash,
         t.tsMs,
@@ -626,6 +646,13 @@ export class Db {
         s(t.bebopGasCost),
         s(t.bebopFee),
         s(t.edgeBebop),
+        s(t.pancakeOut),
+        t.pancakeAgeMs,
+        t.pancakeDegraded === null ? null : t.pancakeDegraded ? 1 : 0,
+        s(t.pancakeGasCost),
+        s(t.pancakeFee),
+        t.pancakeTier,
+        s(t.edgePancake),
       ]
     );
   }

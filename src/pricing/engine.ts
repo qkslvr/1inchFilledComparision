@@ -7,6 +7,7 @@ import type { Sampler, RefPriceLoop } from '../kalqix/sampler.js';
 import type { GasPoller } from '../gas/poller.js';
 import type { KyberQuoter } from '../kyber/quoter.js';
 import type { BebopFeed } from '../bebop/feed.js';
+import type { PancakeQuoter } from '../pancake/quoter.js';
 import { walkBuyBaseFloat, walkSellBaseFloat } from '../bebop/depth.js';
 import { NATIVE_SENTINEL } from '../../config.js';
 import { toFloat } from './units.js';
@@ -46,6 +47,8 @@ export interface LiveOrder {
   maxEdgeKyber: bigint | null;
   tShadowBebopRecorded: boolean;
   maxEdgeBebop: bigint | null;
+  tShadowPancakeRecorded?: boolean;
+  maxEdgePancake?: bigint | null;
 }
 
 /** human-unit float -> token base units, floored; splits large exponents so
@@ -75,7 +78,8 @@ export class PricingEngine {
     /** KalqiX taker fee in ppm; config default or the account's live effective rate. */
     private readonly takerFeePpm: bigint = config.kalqixTakerFeeBps * 100n,
     private readonly kyber: KyberQuoter | null = null,
-    private readonly bebop: BebopFeed | null = null
+    private readonly bebop: BebopFeed | null = null,
+    private readonly pancake: PancakeQuoter | null = null
   ) {}
 
   get liveCount(): number {
@@ -99,11 +103,13 @@ export class PricingEngine {
         this.kyber?.track(order.orderHash, order.makerAsset, order.takerAsset, amountFn, true) ?? false;
       if (!tracked) return false;
       this.orders.set(order.orderHash, order);
+      this.pancake?.track(order.orderHash, order.makerAsset, order.takerAsset, amountFn);
       return true;
     }
     this.orders.set(order.orderHash, order);
     this.syncSamplers();
     this.kyber?.track(order.orderHash, order.makerAsset, order.takerAsset, amountFn);
+    this.pancake?.track(order.orderHash, order.makerAsset, order.takerAsset, amountFn);
     return true;
   }
 
@@ -118,6 +124,7 @@ export class PricingEngine {
     this.orders.delete(orderHash);
     this.syncSamplers();
     this.kyber?.untrack(orderHash);
+    this.pancake?.untrack(orderHash);
   }
 
   /** Persist the running max-edge figures once, when the order stops being
@@ -129,6 +136,7 @@ export class PricingEngine {
     if (o.maxEdge !== null) this.db.setMaxEdge(o.orderHash, o.maxEdge, o.maxEdgeMs ?? Date.now());
     if (o.maxEdgeKyber !== null) this.db.setMaxEdgeKyber(o.orderHash, o.maxEdgeKyber);
     if (o.maxEdgeBebop !== null) this.db.setMaxEdgeBebop(o.orderHash, o.maxEdgeBebop);
+    if (o.maxEdgePancake != null) this.db.setMaxEdgePancake(o.orderHash, o.maxEdgePancake);
   }
 
   start(): void {
@@ -174,11 +182,11 @@ export class PricingEngine {
   private weiToTakerAsset(wei: bigint, o: LiveOrder): bigint | null {
     const takerIsBase = o.direction === 'BUY_BASE';
     const takerSymbol = takerIsBase ? o.pair!.base.symbol : o.pair!.quote.symbol;
-    if (takerSymbol === 'ETH') return wei;
-    const ethMid = this.midFor('ETH_USDC');
+    if (takerSymbol === config.nativeSymbol) return wei;
+    const ethMid = this.midFor(config.nativeTicker);
     if (ethMid === null) return null;
     const usdc = quoteForBaseCeil(wei, ethMid, 18);
-    if (takerSymbol === 'USDC') return usdc;
+    if (takerSymbol === config.stableSymbol) return usdc;
     // cbBTC taker: USDC -> cbBTC via the pair's own mid
     const btcMid = this.midFor(o.pair!.ticker);
     if (btcMid === null) return null;
@@ -341,6 +349,9 @@ export class PricingEngine {
       }
     }
 
+    const pancake = this.pricePancake(o, nowMs, auctionCost, notionalTaker, gasCostRaw, gasPriceWei,
+      (wei) => this.weiToTakerAsset(wei, o));
+
     return {
       orderHash: o.orderHash,
       tsMs: nowMs,
@@ -375,6 +386,7 @@ export class PricingEngine {
       bebopGasCost,
       bebopFee,
       edgeBebop,
+      ...pancake,
     };
   }
 
@@ -393,7 +405,7 @@ export class PricingEngine {
   ): TickInsert | null {
     const quote = this.kyber?.latest.get(o.orderHash);
     if (!quote || quote.amountOutUsd6 === null || quote.amountOut <= 0n) return null;
-    const ethMid = this.midFor('ETH_USDC');
+    const ethMid = this.midFor(config.nativeTicker);
     if (ethMid === null) return null;
 
     const weiToTakerViaQuote = (wei: bigint): bigint => {
@@ -455,6 +467,8 @@ export class PricingEngine {
       }
     }
 
+    const pancake = this.pricePancake(o, nowMs, auctionCost, auctionCost, fillGas, gasPriceWei, weiToTakerViaQuote);
+
     return {
       orderHash: o.orderHash,
       tsMs: nowMs,
@@ -489,6 +503,56 @@ export class PricingEngine {
       bebopGasCost,
       bebopFee,
       edgeBebop,
+      ...pancake,
+    };
+  }
+
+  /** PancakeSwap leg. Mirrors the Kyber block: a single-venue quote in
+   *  takerAsset units, plus its own swap-leg gas on top of the fill gas. The
+   *  wei->takerAsset conversion differs between the two callers, so it is passed
+   *  in rather than assumed. */
+  private pricePancake(
+    o: LiveOrder,
+    nowMs: number,
+    auctionCost: bigint,
+    notionalTaker: bigint,
+    gasCostRaw: bigint | null,
+    gasPriceWei: bigint,
+    weiToTaker: (wei: bigint) => bigint | null
+  ): {
+    pancakeOut: bigint | null;
+    pancakeAgeMs: number | null;
+    pancakeDegraded: boolean | null;
+    pancakeGasCost: bigint | null;
+    pancakeFee: bigint | null;
+    pancakeTier: number | null;
+    edgePancake: bigint | null;
+  } {
+    const empty = {
+      pancakeOut: null, pancakeAgeMs: null, pancakeDegraded: null,
+      pancakeGasCost: null, pancakeFee: null, pancakeTier: null, edgePancake: null,
+    };
+    const quote = this.pancake?.latest.get(o.orderHash);
+    if (!quote) return empty;
+    const ageMs = nowMs - quote.receivedAtMs;
+    // Same staleness rule as Kyber: an old quote, or one taken at a size a
+    // partial fill has since moved past, cannot support a decision.
+    const degraded = ageMs > config.pancake.degradedQuoteAgeMs || quote.amountIn !== o.remainingMaker;
+    const swapGas = weiToTaker(quote.gasUnits * gasPriceWei);
+    if (swapGas === null || gasCostRaw === null) {
+      return { ...empty, pancakeOut: quote.amountOut, pancakeAgeMs: ageMs, pancakeDegraded: degraded, pancakeTier: quote.fee };
+    }
+    const fee = bpsOfCeil(quote.amountOut, config.pancake.feeBps);
+    return {
+      pancakeOut: quote.amountOut,
+      pancakeAgeMs: ageMs,
+      pancakeDegraded: degraded,
+      pancakeGasCost: swapGas,
+      pancakeFee: fee,
+      pancakeTier: quote.fee,
+      edgePancake:
+        quote.amountOut - auctionCost - gasCostRaw - swapGas - fee -
+        bpsOfCeil(notionalTaker, config.safetyMarginBps),
     };
   }
 
@@ -549,6 +613,15 @@ export class PricingEngine {
       }
       if (o.maxEdgeKyber === null || tick.edgeKyber > o.maxEdgeKyber) {
         o.maxEdgeKyber = tick.edgeKyber;
+      }
+    }
+    if (tick.edgePancake !== null) {
+      if (tick.edgePancake > 0n && !tick.exclusive && !o.tShadowPancakeRecorded) {
+        o.tShadowPancakeRecorded = true;
+        this.db.setShadowPancake(o.orderHash, tick.tsMs, tick.edgePancake);
+      }
+      if (o.maxEdgePancake == null || tick.edgePancake > o.maxEdgePancake) {
+        o.maxEdgePancake = tick.edgePancake;
       }
     }
     if (tick.edgeBebop !== null) {

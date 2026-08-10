@@ -18,7 +18,20 @@ export function schemaFor(chainId: number): string {
 /** Additive DDL applied on collector boot. Postgres supports IF NOT EXISTS on
  *  ADD COLUMN, so these are idempotent and need no probing. Empty for a fresh
  *  database: every column the SQLite MIGRATIONS added is in SCHEMA below. */
-export const MIGRATIONS: string[] = [];
+export const MIGRATIONS: string[] = [
+  // PancakeSwap arrived as a fourth venue with BNB Chain; these keep an existing
+  // Ethereum database readable by the new code, where the columns stay null.
+  `ALTER TABLE ticks ADD COLUMN IF NOT EXISTS pancake_out TEXT`,
+  `ALTER TABLE ticks ADD COLUMN IF NOT EXISTS pancake_age_ms INTEGER`,
+  `ALTER TABLE ticks ADD COLUMN IF NOT EXISTS pancake_degraded SMALLINT`,
+  `ALTER TABLE ticks ADD COLUMN IF NOT EXISTS pancake_gas_cost TEXT`,
+  `ALTER TABLE ticks ADD COLUMN IF NOT EXISTS pancake_fee TEXT`,
+  `ALTER TABLE ticks ADD COLUMN IF NOT EXISTS pancake_tier INTEGER`,
+  `ALTER TABLE ticks ADD COLUMN IF NOT EXISTS edge_pancake TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS t_shadow_pancake_ms BIGINT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS t_shadow_pancake_edge TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS max_edge_pancake TEXT`,
+];
 
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS runs (
@@ -75,6 +88,9 @@ CREATE TABLE IF NOT EXISTS orders (
   t_shadow_bebop_ms    BIGINT,
   t_shadow_bebop_edge  TEXT,
   max_edge_bebop       TEXT,
+  t_shadow_pancake_ms   BIGINT,
+  t_shadow_pancake_edge TEXT,
+  max_edge_pancake      TEXT,
   max_edge             TEXT,
   max_edge_ms          BIGINT,
   -- outcome
@@ -158,7 +174,14 @@ CREATE TABLE IF NOT EXISTS ticks (
   bebop_degraded   SMALLINT,
   bebop_gas_cost   TEXT,
   bebop_fee        TEXT,
-  edge_bebop       TEXT
+  edge_bebop       TEXT,
+  pancake_out      TEXT,
+  pancake_age_ms   INTEGER,
+  pancake_degraded SMALLINT,
+  pancake_gas_cost TEXT,
+  pancake_fee      TEXT,
+  pancake_tier     INTEGER,
+  edge_pancake     TEXT
 );
 -- One index, not two. order_hash is a 66-character string, so every index on it
 -- costs ~100 bytes a row; a second one made the ticks indexes larger than the

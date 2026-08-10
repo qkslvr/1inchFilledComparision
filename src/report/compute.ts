@@ -227,7 +227,8 @@ export async function computeReport(db: Db): Promise<ReportData> {
   const TICKS_SQL = `SELECT order_hash, ts_ms, degraded, exclusive, insufficient_depth, hedge_proceeds, auction_cost,
             gas_cost_raw, fee_cost, notional_taker, notional_usdc,
             kyber_out, kyber_degraded, kyber_gas_cost, kyber_fee,
-            bebop_out, bebop_age_ms, bebop_degraded, bebop_gas_cost, bebop_fee
+            bebop_out, bebop_age_ms, bebop_degraded, bebop_gas_cost, bebop_fee,
+            pancake_out, pancake_age_ms, pancake_degraded, pancake_gas_cost, pancake_fee
      FROM ticks WHERE order_hash = ANY(?) ORDER BY order_hash, ts_ms`;
 
   const defaultParams: ClassifyParams = {
