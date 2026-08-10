@@ -14,6 +14,17 @@ cd "$(dirname "$0")/.."
 export PATH="$HOME/.local/node/bin:$PATH"
 mkdir -p logs
 
+# The read-only dashboard API. Vercel fetches this over HTTPS rather than
+# talking to Postgres directly: the public hostname is proxied by Cloudflare,
+# which carries HTTP but not raw TCP, and serving JSON keeps the database off
+# the internet entirely.
+if ! pgrep -f "tsx src/dash/mai[n].ts" > /dev/null 2>&1; then
+  echo "$(date -Is) ensure: dashboard not running, starting" >> logs/ensure.log
+  setsid nohup env DASH_HOST=0.0.0.0 DASH_PORT=8787 npx tsx src/dash/main.ts \
+    >> logs/dash.log 2>&1 < /dev/null &
+  sleep 2
+fi
+
 for chain in ethereum; do
   # The chain is an argument to run-collector.sh, so it appears in the command
   # line. The bracket keeps this pattern from matching the script's own cmdline.
