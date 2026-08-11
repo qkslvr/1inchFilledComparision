@@ -78,7 +78,15 @@ export const fetchOrderBookAuthed: BookFetcher = async (ticker, depth, timeoutMs
 export async function chooseBookFetcher(
   onDecision: (msg: string) => void
 ): Promise<{ fetcher: BookFetcher; source: 'authed' | 'public' }> {
-  const probeTicker = config.pairs[0]!.ticker;
+  // Probe a pair that actually has a KalqiX market. Taking pairs[0] blindly
+  // asked for BNB_USDT on BNB Chain, which does not exist there, and the 404
+  // demoted us to the public book for every pair that does.
+  const probePair = config.pairs.find((p) => p.kalqix);
+  if (probePair === undefined) {
+    onDecision('no configured pair maps to a KalqiX market; book sampling disabled');
+    return { fetcher: fetchOrderBook, source: 'public' };
+  }
+  const probeTicker = probePair.kalqix!.ticker;
   if (kalqixCreds()) {
     try {
       const [authed, pub] = await Promise.all([
