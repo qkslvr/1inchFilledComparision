@@ -20,7 +20,10 @@ mkdir -p logs
 # the internet entirely.
 if ! pgrep -f "tsx src/dash/mai[n].ts" > /dev/null 2>&1; then
   echo "$(date -Is) ensure: dashboard not running, starting" >> logs/ensure.log
-  setsid nohup env DASH_HOST=0.0.0.0 DASH_PORT=8787 npx tsx src/dash/main.ts \
+    # Port comes from .env; 5432 is what is opened through to this box, even
+  # though the number conventionally belongs to Postgres (which now sits on
+  # loopback 5433 precisely so the UI can have it).
+  setsid nohup npx tsx src/dash/main.ts \
     >> logs/dash.log 2>&1 < /dev/null &
   sleep 2
 fi
