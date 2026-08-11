@@ -174,6 +174,10 @@ export const config = {
   bookDepth: 50,
   sampleIntervalMs: 1000,
   pricingIntervalMs: 1000,
+  /** Cadence once an auction is past its floor. The taker amount no longer
+   *  moves there, so 1 Hz only multiplies rows: BNB Chain's long-dated orders
+   *  produced 86,400 near-identical ticks each per day at the full rate. */
+  postAuctionIntervalMs: 30_000,
   refPriceIntervalMs: 30_000,
   gasPollIntervalMs: 30_000,
   /** Gas units for a hypothetical fill tx, incl. wrap/unwrap allowance for native-ETH takers. */

@@ -47,6 +47,8 @@ export interface LiveOrder {
   maxEdgeKyber: bigint | null;
   tShadowBebopRecorded: boolean;
   maxEdgeBebop: bigint | null;
+  /** last time this order was priced, for the post-auction cadence */
+  lastTickMs?: number;
   tShadowPancakeRecorded?: boolean;
   maxEdgePancake?: bigint | null;
 }
@@ -202,11 +204,31 @@ export class PricingEngine {
     return quoteForBaseFloor(amount, m, o.pair!.base.decimals);
   }
 
+  /** True once the auction has run its course. Past that point the taker amount
+   *  is pinned at the floor and only venue prices move, so a decision either
+   *  already happened or is no longer time-critical. */
+  private pastAuction(o: LiveOrder, nowMs: number): boolean {
+    const start = o.decoded.auctionStartMs;
+    const durS = o.decoded.auctionDurationS;
+    if (start === null || durS === null) return false;
+    return nowMs > start + durS * 1000 + config.reapGraceMs;
+  }
+
   private tickAll(): void {
     if (this.stopped) return;
     const nowMs = Date.now();
     for (const o of this.orders.values()) {
       try {
+        // BNB Chain carries long-dated Fusion orders — deadlines 29 hours out,
+        // some with none at all — and pricing one of those every second for a
+        // day produces 86,400 near-identical rows. Four of them filled the disk.
+        // Past the auction floor the cadence drops; the signal is still sampled,
+        // just not 30 times more often than it changes.
+        if (this.pastAuction(o, nowMs)) {
+          const last = o.lastTickMs ?? 0;
+          if (nowMs - last < config.postAuctionIntervalMs) continue;
+        }
+        o.lastTickMs = nowMs;
         const tick = this.priceOrder(o, nowMs);
         if (tick) {
           this.db.insertTick(tick);
