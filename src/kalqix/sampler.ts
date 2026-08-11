@@ -1,6 +1,7 @@
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { config, NATIVE_SENTINEL } from '../../config.js';
 import { pancakeSpot } from '../pancake/quoter.js';
+import { rescale } from '../pricing/units.js';
 import type { PairConfig, ParsedBook, SnapshotRecord } from '../types.js';
 import type { Db } from '../db/db.js';
 import { fetchOrderBook, KalqixRateLimitError, type BookFetcher } from './client.js';
@@ -25,6 +26,27 @@ export function deserializeBook(gz: Buffer): ParsedBook {
 
 /** One 1 Hz book sampler per ticker, active only while live orders exist on the
  *  pair. Persists every snapshot; keeps the latest in memory for pricing ticks. */
+/** Restate a KalqiX book in a pair's own units.
+ *
+ *  KalqiX quotes cbBTC/USDC and ETH/USDC on Base. A pair elsewhere hedging on
+ *  one of those may carry different decimals for the same economic asset —
+ *  BSC's BTCB is 18dp against cbBTC's 8, its USDT 18dp against USDC's 6. Prices
+ *  are quote-units per whole base, so only the quote scale moves them;
+ *  quantities are base units and move with the base scale. Converting here
+ *  means every walk, mid and depth figure downstream is already in the units
+ *  the order is denominated in. */
+export function rescaleBook(book: ParsedBook, pair: PairConfig): ParsedBook {
+  const k = pair.kalqix;
+  if (!k || (k.baseDecimals === pair.base.decimals && k.quoteDecimals === pair.quote.decimals)) {
+    return book;
+  }
+  const level = (l: { price: bigint; qty: bigint }) => ({
+    price: rescale(l.price, k.quoteDecimals, pair.quote.decimals),
+    qty: rescale(l.qty, k.baseDecimals, pair.base.decimals),
+  });
+  return { bids: book.bids.map(level), asks: book.asks.map(level) };
+}
+
 export class Sampler {
   latest: SnapshotRecord | null = null;
   sampleCount = 0;
@@ -35,11 +57,15 @@ export class Sampler {
   private stopped = false;
 
   constructor(
-    readonly ticker: string,
+    readonly pair: PairConfig,
     private readonly db: Db,
     private readonly runId: () => number,
     private readonly fetchBook: BookFetcher = fetchOrderBook
   ) {}
+
+  get ticker(): string {
+    return this.pair.ticker;
+  }
 
   get active(): boolean {
     return this.timer !== null;
@@ -65,8 +91,12 @@ export class Sampler {
     if (this.inFlight || this.stopped || Date.now() < this.pausedUntilMs) return;
     this.inFlight = true;
     try {
-      const { book, receivedAtMs, fetchMs } = await this.fetchBook(this.ticker, config.bookDepth);
+      // Fetch the KalqiX market, then restate it in this pair's units.
+      const market = this.pair.kalqix?.ticker ?? this.pair.ticker;
+      const raw = await this.fetchBook(market, config.bookDepth);
       if (this.stopped) return;
+      const book = rescaleBook(raw.book, this.pair);
+      const { receivedAtMs, fetchMs } = raw;
       // Awaited: the snapshot id goes onto every tick that cites this book, so
       // the row has to exist before pricing can reference it.
       const id = await this.db.insertSnapshot(
@@ -132,8 +162,8 @@ export class RefPriceLoop {
         // Chains KalqiX doesn't quote have no book to take a mid from, so the
         // on-chain DEX prices the pair instead. Gas conversion is the only
         // consumer, and it needs a number for every chain.
-        const priced = config.hasKalqix
-          ? await this.kalqixMid(pair.ticker)
+        const priced = pair.kalqix
+          ? await this.kalqixMid(pair)
           : await this.onchainMid(pair);
         if (priced !== null && !this.stopped) {
           this.latestMid.set(pair.ticker, priced);
@@ -145,9 +175,9 @@ export class RefPriceLoop {
     }
   }
 
-  private async kalqixMid(ticker: string): Promise<{ tsMs: number; mid: bigint } | null> {
-    const { book, receivedAtMs } = await fetchOrderBook(ticker, 1);
-    const m = mid(book);
+  private async kalqixMid(pair: PairConfig): Promise<{ tsMs: number; mid: bigint } | null> {
+    const { book, receivedAtMs } = await fetchOrderBook(pair.kalqix!.ticker, 1);
+    const m = mid(rescaleBook(book, pair));
     return m === null ? null : { tsMs: receivedAtMs, mid: m };
   }
 

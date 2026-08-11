@@ -70,9 +70,11 @@ const refPrices = new RefPriceLoop(db);
 // No samplers on a chain KalqiX does not quote: the engine then sees no
 // snapshot, leaves the kalqix tick columns null, and the venue simply reads
 // "no data" rather than erroring once a second against a missing market.
-const samplers = config.hasKalqix
-  ? new Map<string, Sampler>(config.pairs.map((p) => [p.ticker, new Sampler(p.ticker, db, () => runId, bookFetcher)]))
-  : new Map<string, Sampler>();
+// One sampler per pair that has a KalqiX market to hedge on. BNB has none, so
+// BNB_USDT simply carries no KalqiX column while BTCB and ETH orders do.
+const samplers = new Map<string, Sampler>(
+  config.pairs.filter((p) => p.kalqix).map((p) => [p.ticker, new Sampler(p, db, () => runId, bookFetcher)])
+);
 const kyber = new KyberQuoter(() => db.event(runId, 'kyber_429', {}));
 const bebop = new BebopFeed((kind) => db.event(runId, kind, {}));
 const pancake = new PancakeQuoter();

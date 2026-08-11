@@ -29,7 +29,6 @@ interface ChainProfile {
    *  books, leave the kalqix tick columns null — but still treat the configured
    *  pairs as fully tracked. Without this an entire chain would fall through to
    *  the kyber-only path, which is capped at four concurrent orders. */
-  hasKalqix: boolean;
   /** pair ticker whose mid prices the gas asset, e.g. ETH_USDC or BNB_USDT */
   nativeTicker: string;
   /** symbol of the gas asset, and of the stable everything converts through */
@@ -73,19 +72,20 @@ const profiles: Record<string, ChainProfile> = {
         ticker: 'ETH_USDC',
         base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
         quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ETHEREUM] },
+      kalqix: { ticker: 'ETH_USDC', baseDecimals: 18, quoteDecimals: 6 },
       },
       {
         // WBTC hedged on KalqiX's cbBTC market: same URL ticker, different wrapper
         ticker: 'cbBTC_USDC',
         base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
         quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ETHEREUM] },
+      kalqix: { ticker: 'cbBTC_USDC', baseDecimals: 8, quoteDecimals: 6 },
       },
     ],
     rpcEnvVar: 'ETH_RPC_URL',
     rpcUrlDefault: 'https://ethereum-rpc.publicnode.com',
     dashPortDefault: 8788,
     kyberChainSlug: 'ethereum',
-    hasKalqix: true,
     nativeTicker: 'ETH_USDC',
     nativeSymbol: 'ETH',
     stableSymbol: 'USDC',
@@ -109,21 +109,19 @@ const profiles: Record<string, ChainProfile> = {
         ticker: 'BTCB_USDT',
         base: { symbol: 'BTCB', decimals: 18, addresses: [BTCB_BSC] },
         quote: { symbol: 'USDT', decimals: 18, addresses: [USDT_BSC] },
+      kalqix: { ticker: 'cbBTC_USDC', baseDecimals: 8, quoteDecimals: 6 },
       },
       {
         ticker: 'ETH_USDT',
         base: { symbol: 'ETH', decimals: 18, addresses: [ETH_BSC] },
         quote: { symbol: 'USDT', decimals: 18, addresses: [USDT_BSC] },
+      kalqix: { ticker: 'ETH_USDC', baseDecimals: 18, quoteDecimals: 6 },
       },
     ],
     rpcEnvVar: 'BSC_RPC_URL',
     rpcUrlDefault: 'https://bsc-dataseed.binance.org',
     dashPortDefault: 8789,
     kyberChainSlug: 'bsc',
-    // KalqiX quotes no BNB Chain market. Its columns stay null and its card on
-    // the dashboard reads "no data"; the venues that matter here are Kyber,
-    // PancakeSwap and Bebop.
-    hasKalqix: false,
     nativeTicker: 'BNB_USDT',
     nativeSymbol: 'BNB',
     stableSymbol: 'USDT',
@@ -132,7 +130,7 @@ const profiles: Record<string, ChainProfile> = {
     pancakeFees: [100, 500, 2500, 10000],
     kyberOnlySkipPairs: [],
     reportCaveats: [
-      'KalqiX quotes no BNB Chain market, so its column is empty throughout; the venue comparison here is Kyber against PancakeSwap against Bebop.',
+      'BNB and BTCB/ETH differ here: KalqiX lists no BNB market, so BNB_USDT carries no KalqiX column, while BTCB and ETH orders are priced against its cbBTC and ETH books. Those settle on Base, so cross-chain inventory and rebalancing costs are ignored.',
       'USDT on BNB Chain is 18-decimal, unlike the 6-decimal USDC used on Ethereum. USD figures are converted accordingly but are not directly comparable line-for-line with the Ethereum report.',
     ],
   },
@@ -160,7 +158,7 @@ export function isKyberOnlySkipped(makerAsset: string, takerAsset: string): bool
 export const config = {
   chainId: profile.chainId,
   chainLabel: profile.label,
-  hasKalqix: profile.hasKalqix,
+  hasKalqix: profile.pairs.some((p) => p.kalqix !== undefined),
   nativeTicker: profile.nativeTicker,
   nativeSymbol: profile.nativeSymbol,
   stableSymbol: profile.stableSymbol,

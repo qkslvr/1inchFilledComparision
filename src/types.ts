@@ -9,6 +9,22 @@ export interface PairConfig {
   ticker: string;
   base: AssetConfig;
   quote: AssetConfig;
+  /** The KalqiX market this pair hedges on, when one exists.
+   *
+   *  KalqiX lists only cbBTC/USDC and ETH/USDC, both settling on Base, so a
+   *  pair on another chain hedges against whichever of those matches its asset
+   *  — BNB has no market at all and simply goes unhedged there.
+   *
+   *  Its decimals are recorded because they need not match the order's: BTCB is
+   *  18dp against cbBTC's 8, and BSC's USDT is 18dp against USDC's 6. The book
+   *  is rescaled into this pair's units when it is parsed, so nothing
+   *  downstream has to know the difference. */
+  kalqix?: {
+    /** market ticker in the KalqiX URL, e.g. cbBTC_USDC */
+    ticker: string;
+    baseDecimals: number;
+    quoteDecimals: number;
+  };
 }
 
 /** SELL_BASE: maker sells base for quote, we hedge by selling base into bids.
