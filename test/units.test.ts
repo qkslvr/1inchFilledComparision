@@ -9,6 +9,7 @@ import {
   quoteForBaseCeil,
   quoteForBaseFloor,
   pow10,
+  rescale,
 } from '../src/pricing/units.js';
 
 test('mulDiv floor and ceil', () => {
@@ -43,4 +44,13 @@ test('fmtUnits', () => {
   assert.equal(fmtUnits(1n, 6), '0.000001');
   assert.equal(fmtUnits(-2_000_000n, 6), '-2');
   assert.equal(fmtUnits(123_456_789_012_345_678n, 18), '0.123456');
+});
+
+test('rescale normalises stable amounts between chains', () => {
+  // 100 USDT on BNB Chain (18dp) -> the 6dp convention notional_usdc uses
+  assert.equal(rescale(100n * 10n ** 18n, 18, 6), 100_000_000n);
+  // 100 USDC on Ethereum (6dp) is already in that convention
+  assert.equal(rescale(100_000_000n, 6, 6), 100_000_000n);
+  // and back up, for completeness
+  assert.equal(rescale(100_000_000n, 6, 18), 100n * 10n ** 18n);
 });

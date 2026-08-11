@@ -21,6 +21,7 @@ import {
   ppmOfCeil,
   quoteForBaseCeil,
   quoteForBaseFloor,
+  rescale,
 } from './units.js';
 import { logError } from '../log.js';
 
@@ -198,10 +199,19 @@ export class PricingEngine {
   /** takerAsset units -> USDC (6dp) via mids, floored. Display/bucketing only. */
   private takerAssetToUsdc(amount: bigint, o: LiveOrder): bigint | null {
     const takerIsBase = o.direction === 'BUY_BASE';
-    if (!takerIsBase) return amount; // taker is USDC
-    const m = this.midFor(o.pair!.ticker);
-    if (m === null) return null;
-    return quoteForBaseFloor(amount, m, o.pair!.base.decimals);
+    // Quote-token units, whatever this chain's stable happens to use.
+    const inQuoteUnits = takerIsBase
+      ? (() => {
+          const m = this.midFor(o.pair!.ticker);
+          return m === null ? null : quoteForBaseFloor(amount, m, o.pair!.base.decimals);
+        })()
+      : amount;
+    if (inQuoteUnits === null) return null;
+    // Every reader treats notional_usdc as 6dp, so normalise here rather than
+    // teaching each of them the chain's stable. BNB Chain's USDT is 18dp
+    // against Ethereum's 6dp USDC, and writing raw units made a $100 order
+    // render as 100,081,775,889,372.
+    return rescale(inQuoteUnits, o.pair!.quote.decimals, 6);
   }
 
   /** True once the auction has run its course. Past that point the taker amount

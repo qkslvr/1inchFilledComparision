@@ -57,3 +57,13 @@ export function baseForQuoteFloor(quoteAmount: bigint, price: bigint, baseDecima
 export function baseForQuoteCeil(quoteAmount: bigint, price: bigint, baseDecimals: number): bigint {
   return mulDivCeil(quoteAmount, pow10(baseDecimals), price);
 }
+
+/** Move a fixed-point amount between decimal scales, flooring on the way down.
+ *  Chains disagree about their stables — 6dp USDC on Ethereum, 18dp USDT on BNB
+ *  Chain — so anything stored under a fixed convention has to be normalised. */
+export function rescale(amount: bigint, fromDecimals: number, toDecimals: number): bigint {
+  if (fromDecimals === toDecimals) return amount;
+  return fromDecimals > toDecimals
+    ? amount / 10n ** BigInt(fromDecimals - toDecimals)
+    : amount * 10n ** BigInt(toDecimals - fromDecimals);
+}
