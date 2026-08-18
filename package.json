@@ -24,7 +24,8 @@
     "backfill:outcomes": "tsx scripts/backfill-outcomes.ts",
     "compare": "tsx scripts/rate-compare.ts",
     "prune": "tsx scripts/prune.ts",
-    "collect:cow": "tsx src/cow/resolver.ts"
+    "collect:cow": "tsx src/cow/resolver.ts",
+    "explain": "tsx scripts/explain-edge.ts"
   },
   "dependencies": {
     "@1inch/fusion-sdk": "^2.4.10",
