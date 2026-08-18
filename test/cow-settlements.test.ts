@@ -82,3 +82,20 @@ test('no lead time is reported, because the order was never seen in flight', () 
   assert.equal(r.cls, 'WIN');
   assert.equal(r.leadTimeMs, null);
 });
+
+/** "book too thin" must mean a book existed and could not absorb the size —
+ *  never "the venue was disconnected". The age field is the only thing that
+ *  distinguishes them, so a null there has to survive. */
+test('no Bebop book reads as no data, not as a thin book', () => {
+  const noBook = tickForVenue({ ...tick('1900000000'), bebop_out: null, bebop_age_ms: null }, 'bebop');
+  assert.equal(noBook.insufficientDepth, false);
+  assert.equal(noBook.hedgeProceeds, null);
+});
+
+test('a book that could not absorb the size does read as too thin', () => {
+  const thin = tickForVenue(
+    { ...tick('1900000000'), bebop_out: null, bebop_gas_cost: null, bebop_age_ms: 400 },
+    'bebop'
+  );
+  assert.equal(thin.insufficientDepth, true);
+});

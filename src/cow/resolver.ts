@@ -132,6 +132,7 @@ async function evaluate(trade: CowTrade): Promise<void> {
   }
 
   // --- Bebop ---
+  let bebopBookFound = false;
   let bebopOut: bigint | null = null;
   let bebopGasCost: bigint | null = null;
   let bebopFee: bigint | null = null;
@@ -139,6 +140,7 @@ async function evaluate(trade: CowTrade): Promise<void> {
   if (bebop.enabled) {
     const found = bebop.bookFor(sellToken, buyToken);
     if (found) {
+      bebopBookFound = true;
       const sellDecimals = direction === 'SELL_BASE' ? pair.base.decimals : pair.quote.decimals;
       const human = toFloat(trade.sellAmount, sellDecimals);
       const out = found.aIsBase ? walkSellBaseFloat(found.book.bids, human) : walkBuyBaseFloat(found.book.asks, human);
@@ -183,14 +185,19 @@ async function evaluate(trade: CowTrade): Promise<void> {
     partialBestEdge: null,
     kyberOut,
     kyberAmountIn: trade.sellAmount,
-    kyberQuoteAgeMs: quoteLagMs,
-    kyberDegraded: quoteLagMs > config.quoteLagToleranceMs,
+    // Null unless a quote actually came back: an age with no output is read
+    // downstream as 'we had data and it was insufficient'.
+    kyberQuoteAgeMs: kyberOut === null ? null : quoteLagMs,
+    kyberDegraded: kyberOut === null ? null : quoteLagMs > config.quoteLagToleranceMs,
     kyberGasCost,
     kyberFee,
     edgeKyber,
     bebopOut,
-    bebopAgeMs: quoteLagMs,
-    bebopDegraded: quoteLagMs > config.quoteLagToleranceMs,
+    // Only when a book was found. Setting it unconditionally made every row
+    // report 'book too thin' — including a 34 USD trade — when the truth was
+    // that Bebop was disconnected and streaming no books at all.
+    bebopAgeMs: bebopBookFound ? quoteLagMs : null,
+    bebopDegraded: bebopBookFound ? quoteLagMs > config.quoteLagToleranceMs : null,
     bebopGasCost,
     bebopFee,
     edgeBebop,
