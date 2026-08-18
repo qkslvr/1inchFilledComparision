@@ -120,9 +120,7 @@ export const PAGE = `<!doctype html>
   <h1>Shadow Resolver</h1>
   <div class="htools"><span class="stamp" id="stamp"></span><span id="err"></span></div>
 </header>
-<p class="sub">Watching every 1inch Fusion auction and asking one question: had we been a resolver hedging on
-KalqiX, Kyber, or Bebop, would filling this order have been profitable before the real winner took it?
-A measurement only. Nothing is signed or traded.</p>
+<p class="sub" id="sub"></p>
 <nav class="tabs" id="tabs"></nav>
 <div id="root" class="mut">loading…</div>
 
@@ -225,6 +223,28 @@ function setChain(key) {
   localStorage.setItem('chain', key);
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.chain === key));
   document.querySelectorAll('.chain').forEach(s => s.classList.toggle('active', s.dataset.chain === key));
+  setSubtitle();
+}
+
+// The subtitle follows the active dataset: the CoW page measures something
+// different from the chain pages, and leaving the Fusion wording there would
+// claim a race that never happened.
+const SUBTITLES = {
+  fusion: 'Watching every 1inch Fusion auction and asking one question: had we been a resolver hedging on '
+    + 'KalqiX, Kyber, or Bebop, would filling this order have been profitable before the real winner took it? '
+    + 'A measurement only. Nothing is signed or traded.',
+  cow: 'Watching every settled CoW Swap trade and asking one question: would KalqiX, Kyber or Bebop have paid '
+    + 'that user more than the winning solver did? CoW opens its order book only to its own solvers, so this '
+    + 'compares prices after settlement — there is no lead time and no race. A measurement only. Nothing is '
+    + 'signed or traded.',
+};
+
+let lastChains = [];
+
+function setSubtitle() {
+  const active = lastChains.find(c => c.key === activeChain) ?? lastChains[0];
+  const el = document.getElementById('sub');
+  if (el) el.textContent = SUBTITLES[active && active.orderSource ? active.orderSource : 'fusion'] || SUBTITLES.fusion;
 }
 
 async function refresh() {
@@ -240,6 +260,8 @@ async function refresh() {
     // preserve open/closed state of the ops drawer across refreshes
     const openDrawers = new Set([...document.querySelectorAll('.chain')].filter(s => s.querySelector('details[open]')).map(s => s.dataset.chain));
 
+    lastChains = d.chains;
+    setSubtitle();
     document.getElementById('tabs').style.display = window.__DATASET__ ? 'none' : '';
     document.getElementById('tabs').innerHTML = d.chains.map(c =>
       '<button class="tab' + (c.key === activeChain ? ' active' : '') + '" data-chain="' + esc(c.key) + '" onclick="setChain(\\'' + esc(c.key) + '\\')">'

@@ -30,6 +30,11 @@ interface ChainProfile {
   /** symbol of the gas asset, and of the stable everything converts through */
   nativeSymbol: string;
   stableSymbol: string;
+  /** How stale a venue quote may be before the comparison is called degraded.
+   *  Defaults to degradedSnapshotAgeMs, which suits a live order book; a
+   *  settlement-driven dataset only ever quotes after the block, so a 3s rule
+   *  would mark every single comparison degraded and hide every win. */
+  quoteLagToleranceMs?: number;
   /** Venues that apply to this dataset. PancakeSwap only exists where it is
    *  deployed, so showing its card on Ethereum just renders a permanent
    *  "no orders". */
@@ -155,6 +160,7 @@ const profiles: Record<string, ChainProfile> = {
     label: 'CoW Swap Ethereum',
     schemaOverride: 'cowswap_1',
     orderSource: 'cow',
+    quoteLagToleranceMs: 30_000,
     wethAddress: WETH_ETHEREUM,
     pairs: [
       {
@@ -239,6 +245,7 @@ export const config = {
   hasKalqix: profile.pairs.some((p) => p.kalqix !== undefined),
   schemaOverride: profile.schemaOverride ?? null,
   orderSource: profile.orderSource ?? 'fusion',
+  quoteLagToleranceMs: profile.quoteLagToleranceMs ?? 3000,
   nativeTicker: profile.nativeTicker,
   nativeSymbol: profile.nativeSymbol,
   stableSymbol: profile.stableSymbol,

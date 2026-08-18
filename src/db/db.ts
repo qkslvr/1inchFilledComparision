@@ -717,7 +717,7 @@ export class Db {
         o.sizeUsd,
         o.outcome,
         o.leadS,
-        o.venues.some((v) => v.cls === 'WIN') ? 1 : 0,
+        o.venues.some((v) => v.cls === 'WIN' || v.cls === 'WIN_DEGRADED') ? 1 : 0,
         Date.now(),
       ]
     );

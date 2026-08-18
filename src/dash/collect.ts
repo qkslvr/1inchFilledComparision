@@ -293,6 +293,7 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
   return {
     key: chain.key,
     label: chain.label,
+    orderSource: chain.orderSource,
     chainId: chain.chainId,
     observedHours: activeMs / 3_600_000,
     ordersSeen: seenTotal,
@@ -333,10 +334,14 @@ async function venueScoreboard(db: Db): Promise<Map<string, Record<string, any>>
   const rows = (await db.all(
     `SELECT venue,
             COUNT(*) FILTER (WHERE cls <> 'NO_TICKS') AS decided,
-            COUNT(*) FILTER (WHERE cls = 'WIN') AS wins,
+            -- WIN_DEGRADED counts too: the venue would still have been
+            -- profitable, the data behind it was just stale. Excluding it made
+            -- the card read "won 0" while the row below showed a green won*,
+            -- and on the CoW tab every comparison is degraded by construction.
+            COUNT(*) FILTER (WHERE cls IN ('WIN', 'WIN_DEGRADED')) AS wins,
             COUNT(*) FILTER (WHERE cls IN ('LOSE_SPEED','LOSE_PRICE')) AS losses,
             percentile_cont(0.5) WITHIN GROUP (ORDER BY margin_bps)
-              FILTER (WHERE cls = 'WIN' AND margin_bps IS NOT NULL) AS median_win_bps,
+              FILTER (WHERE cls IN ('WIN', 'WIN_DEGRADED') AND margin_bps IS NOT NULL) AS median_win_bps,
             percentile_cont(0.5) WITHIN GROUP (ORDER BY shortfall_bps)
               FILTER (WHERE cls = 'LOSE_PRICE' AND shortfall_bps IS NOT NULL) AS median_miss_bps
      FROM decided_venue_outcomes WHERE has_data = 1 GROUP BY venue`
