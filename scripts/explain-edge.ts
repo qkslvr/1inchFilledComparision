@@ -31,11 +31,12 @@ for (const venue of VENUES) {
   if (!c) continue;
   // The best win by margin, so the example is a clear one rather than marginal.
   const row = await db.get<Record<string, any>>(
-    `SELECT d.order_hash, d.pair, d.size_usd, d.outcome, v.cls, v.margin_bps,
+    `SELECT d.order_hash, d.pair, d.size_usd, d.outcome, v.cls, v.margin_bps, o.direction,
             t.${c.out} AS venue_out, t.auction_cost, t.gas_cost_raw, t.notional_taker,
             t.${c.fee} AS venue_fee ${c.gas ? `, t.${c.gas} AS venue_gas` : ''}
      FROM decided_venue_outcomes v
      JOIN decided_outcomes d USING (order_hash)
+     JOIN orders o USING (order_hash)
      JOIN LATERAL (SELECT * FROM ticks WHERE order_hash = v.order_hash
                      AND ${c.out} IS NOT NULL ORDER BY ts_ms LIMIT 1) t ON true
      WHERE v.venue = ? AND v.cls IN ('WIN','WIN_DEGRADED')
@@ -46,10 +47,14 @@ for (const venue of VENUES) {
     console.log(`${venue.toUpperCase().padEnd(9)} no winning example yet\n`);
     continue;
   }
-  // Amounts are in the taker asset — what we would have had to pay out.
+  // Every amount is denominated in the TAKER asset — what we would have paid
+  // out — and which asset that is depends on the direction. Reading them all as
+  // the quote made a 0.42 USD trade print as 272 million.
   const pair = config.pairs.find((p) => p.ticker === row.pair);
-  const dec = pair ? pair.quote.decimals : 6;
-  const sym = pair ? pair.quote.symbol : config.stableSymbol;
+  const takerIsBase = row.direction === BUY_BASE;
+  const side = pair ? (takerIsBase ? pair.base : pair.quote) : null;
+  const dec = side ? side.decimals : 6;
+  const sym = side ? side.symbol : config.stableSymbol;
 
   const out = BigInt(row.venue_out);
   const cost = BigInt(row.auction_cost);
