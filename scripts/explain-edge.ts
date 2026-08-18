@@ -44,8 +44,18 @@ for (const venue of VENUES) {
      FROM decided_venue_outcomes v
      JOIN decided_outcomes d USING (order_hash)
      JOIN orders o USING (order_hash)
-     JOIN LATERAL (SELECT * FROM ticks WHERE order_hash = v.order_hash
-                     AND ${c.out} IS NOT NULL ORDER BY ts_ms LIMIT 1) t ON true
+     -- The tick that actually produced the verdict: classify() takes the FIRST
+     -- tick whose edge turns positive, not the first with data. Taking the
+     -- earliest priced tick showed a loss next to a stored win.
+     JOIN LATERAL (
+       SELECT * FROM ticks
+       WHERE order_hash = v.order_hash AND ${c.out} IS NOT NULL
+         AND ${c.out}::numeric - auction_cost::numeric - gas_cost_raw::numeric
+             ${c.gas ? `- COALESCE(${c.gas}::numeric, 0)` : ''}
+             - COALESCE(${c.fee}::numeric, 0)
+             - ceil(notional_taker::numeric * ${config.safetyMarginBps} / 10000) > 0
+       ORDER BY ts_ms LIMIT 1
+     ) t ON true
      WHERE v.venue = ? AND v.cls IN ('WIN','WIN_DEGRADED')
      ORDER BY d.size_usd DESC NULLS LAST LIMIT 1`,
     [venue]
