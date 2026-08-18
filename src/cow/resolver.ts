@@ -56,14 +56,22 @@ for (const s of samplers.values()) s.setActive(true);
 
 const wethFor = (a: string) => (a.toLowerCase() === NATIVE_SENTINEL ? config.wethAddress : a.toLowerCase());
 
+/** Quote assets worth a dollar. Widening beyond USDC means the USD notional
+ *  can no longer key off the chain's single stableSymbol — a USDT or DAI leg is
+ *  just as much a dollar, while a WBTC/ETH trade has no dollar leg at all. */
+const STABLES = new Set(['USDC', 'USDT', 'DAI', 'BUSD']);
+
 /** Value a wei amount in the token the user is paid in, so gas is subtracted in
  *  the same units as the proceeds. */
 function weiToBuyToken(wei: bigint, buyDecimals: number, buySymbol: string): bigint | null {
   if (buySymbol === config.nativeSymbol) return wei;
   const mid = refPrices.latestMid.get(config.nativeTicker);
   if (mid === undefined) return null;
-  const inStable = quoteForBaseCeil(wei, mid.mid, 18);
-  return rescale(inStable, 6, buyDecimals);
+  // ETH_USDC is the reference, so this lands in 6dp dollars; a USDT or DAI leg
+  // is treated as the same dollar and only rescaled.
+  const inDollars = quoteForBaseCeil(wei, mid.mid, 18);
+  if (STABLES.has(buySymbol)) return rescale(inDollars, 6, buyDecimals);
+  return null; // non-stable, non-native leg: gas cannot be priced into it
 }
 
 let evaluated = 0;
@@ -200,8 +208,7 @@ async function evaluate(trade: CowTrade): Promise<void> {
     gasPriceWei: gasNow ? gasPriceWei : null,
     feeCost,
     notionalTaker: cost,
-    notionalUsdc:
-      buySymbol === config.stableSymbol ? rescale(cost, buyDecimals, 6) : null,
+    notionalUsdc: STABLES.has(buySymbol) ? rescale(cost, buyDecimals, 6) : null,
     edgeDefault,
     partialBestQty: null,
     partialBestEdge: null,

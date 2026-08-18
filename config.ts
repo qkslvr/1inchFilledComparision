@@ -58,6 +58,8 @@ interface ChainProfile {
 const WETH_ETHEREUM = '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2';
 const USDC_ETHEREUM = '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48';
 const WBTC_ETHEREUM = '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599';
+const USDT_ETHEREUM = '0xdac17f958d2ee523a2206206994597c13d831ec7';
+const DAI_ETHEREUM = '0x6b175474e89094c44da98b954eedeac495271d0f';
 
 // BNB Chain. Note the decimals: unlike Ethereum, USDT and USDC here are 18dp,
 // and BTCB is 18dp rather than WBTC's 8. Copying the Ethereum profile's
@@ -164,6 +166,31 @@ const profiles: Record<string, ChainProfile> = {
         base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
         quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ETHEREUM] },
         kalqix: { ticker: 'cbBTC_USDC', baseDecimals: 8, quoteDecimals: 6 },
+      },
+      // KalqiX lists only ETH/USDC and cbBTC/USDC, so the pairs below carry no
+      // kalqix mapping and its column reads "no data" for them — deliberately.
+      // Kyber and Bebop quote all of them, and CoW's flow is far wider than two
+      // pairs: with only those two, twelve consecutive settlements matched none.
+      {
+        ticker: 'ETH_USDT',
+        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
+        quote: { symbol: 'USDT', decimals: 6, addresses: [USDT_ETHEREUM] },
+      },
+      {
+        ticker: 'ETH_DAI',
+        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
+        quote: { symbol: 'DAI', decimals: 18, addresses: [DAI_ETHEREUM] },
+      },
+      {
+        ticker: 'WBTC_USDT',
+        base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
+        quote: { symbol: 'USDT', decimals: 6, addresses: [USDT_ETHEREUM] },
+      },
+      {
+        // crypto-crypto, so there is no stable leg and its USD notional is null
+        ticker: 'WBTC_ETH',
+        base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
+        quote: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM] },
       },
     ],
     rpcEnvVar: 'ETH_RPC_URL',
