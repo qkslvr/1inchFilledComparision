@@ -160,6 +160,9 @@ function card(v) {
     + '<div>won <b>' + v.wins + '</b> of <b>' + v.decided + '</b> priced orders</div>'
     + '<div>typical win <b>' + (v.medianWinBps !== null ? '+' + v.medianWinBps.toFixed(1) + ' bps' : '—') + '</b>'
     + ' · typical miss <b>' + (v.medianMissBps !== null ? v.medianMissBps.toFixed(1) + ' bps' : '—') + '</b></div>'
+    // bps mean little without knowing the size they were measured on
+    + '<div>typical size <b>' + (v.medianSizeUsd ? usd(v.medianSizeUsd) + ' USD' : '—') + '</b>'
+    + ' · total <b>' + (v.totalSizeUsd ? usd(v.totalSizeUsd) + ' USD' : '—') + '</b></div>'
     + '</div>'
     + '<div class="ratio">' + seg(v.wins, 'w') + seg(v.losses, 'l') + seg(v.thin, 't') + '</div>'
     + '</div>';

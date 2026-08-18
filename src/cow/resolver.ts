@@ -224,7 +224,9 @@ async function evaluate(trade: CowTrade): Promise<void> {
     eligible: true,
     kyberOnly: false,
     skipReason: null,
-    sizeUsd: null,
+    // Known by now: the tick was built above, so the funnel can show what
+    // volume these percentages cover instead of '0 USD'.
+    sizeUsd: tick.notionalUsdc === null ? null : toFloat(tick.notionalUsdc, 6),
     auctionStartMs: null,
     auctionDurationS: null,
     initialRateBump: null,

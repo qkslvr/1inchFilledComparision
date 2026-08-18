@@ -213,6 +213,8 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
       thin: decidedCount - wins - losses,
       medianWinBps: r?.median_win_bps ?? null,
       medianMissBps: r?.median_miss_bps ?? null,
+      medianSizeUsd: r?.median_size_usd ?? null,
+      totalSizeUsd: Number(r?.total_size_usd ?? 0),
     };
   });
 
@@ -334,7 +336,7 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
  *  (percentile_cont). The SQLite dashboard took the lower of the two. */
 async function venueScoreboard(db: Db): Promise<Map<string, Record<string, any>>> {
   const rows = (await db.all(
-    `SELECT venue,
+    `SELECT v.venue,
             COUNT(*) FILTER (WHERE cls <> 'NO_TICKS') AS decided,
             -- WIN_DEGRADED counts too: the venue would still have been
             -- profitable, the data behind it was just stale. Excluding it made
@@ -345,8 +347,15 @@ async function venueScoreboard(db: Db): Promise<Map<string, Record<string, any>>
             percentile_cont(0.5) WITHIN GROUP (ORDER BY margin_bps)
               FILTER (WHERE cls IN ('WIN', 'WIN_DEGRADED') AND margin_bps IS NOT NULL) AS median_win_bps,
             percentile_cont(0.5) WITHIN GROUP (ORDER BY shortfall_bps)
-              FILTER (WHERE cls = 'LOSE_PRICE' AND shortfall_bps IS NOT NULL) AS median_miss_bps
-     FROM decided_venue_outcomes WHERE has_data = 1 GROUP BY venue`
+              FILTER (WHERE cls = 'LOSE_PRICE' AND shortfall_bps IS NOT NULL) AS median_miss_bps,
+            -- Size of the trades these percentages are computed over. Without
+            -- it "40% won" says nothing about whether that was on 100 USD or
+            -- 100,000.
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY d.size_usd)
+              FILTER (WHERE d.size_usd IS NOT NULL) AS median_size_usd,
+            COALESCE(SUM(d.size_usd), 0) AS total_size_usd
+     FROM decided_venue_outcomes v JOIN decided_outcomes d USING (order_hash)
+     WHERE v.has_data = 1 GROUP BY v.venue`
   )) as Array<Record<string, any>>;
   return new Map(rows.map((r) => [r.venue, r]));
 }
