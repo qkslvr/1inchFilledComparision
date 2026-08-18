@@ -21,15 +21,22 @@ const COLS: Record<string, { out: string; gas: string | null; fee: string }> = {
   cow: { out: 'cow_out', gas: null, fee: 'cow_fee' },
 };
 
-const money = (v: bigint, d: number) =>
-  toFloat(v, d).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** Enough precision to be checkable: an 18-decimal asset at trade size is a
+ *  fraction of a token, and two decimal places renders every line as 0.00. */
+const money = (v: bigint, d: number) => {
+  const n = toFloat(v, d);
+  const places = Math.abs(n) >= 100 ? 2 : Math.abs(n) >= 1 ? 4 : 8;
+  return n.toLocaleString('en-US', { minimumFractionDigits: places, maximumFractionDigits: places });
+};
 
 console.log(`${config.chainLabel} — one winning example per venue\n`);
 
 for (const venue of VENUES) {
   const c = COLS[venue];
   if (!c) continue;
-  // The best win by margin, so the example is a clear one rather than marginal.
+  // The LARGEST winning trade, not the highest bps. Ranking by margin surfaces
+  // dust — a 0.42 USD trade showing 1326 bps is five cents of edge, dominated by
+  // gas rounding rather than telling you anything about the venue.
   const row = await db.get<Record<string, any>>(
     `SELECT d.order_hash, d.pair, d.size_usd, d.outcome, v.cls, v.margin_bps, o.direction,
             t.${c.out} AS venue_out, t.auction_cost, t.gas_cost_raw, t.notional_taker,
@@ -40,7 +47,7 @@ for (const venue of VENUES) {
      JOIN LATERAL (SELECT * FROM ticks WHERE order_hash = v.order_hash
                      AND ${c.out} IS NOT NULL ORDER BY ts_ms LIMIT 1) t ON true
      WHERE v.venue = ? AND v.cls IN ('WIN','WIN_DEGRADED')
-     ORDER BY v.margin_bps DESC NULLS LAST LIMIT 1`,
+     ORDER BY d.size_usd DESC NULLS LAST LIMIT 1`,
     [venue]
   );
   if (!row) {
