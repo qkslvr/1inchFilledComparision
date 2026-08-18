@@ -64,10 +64,10 @@ if (!connectionString) {
   process.exit(1);
 }
 
-const schema = schemaFor(config.chainId);
+const schema = schemaFor(config.chainId, config.schemaOverride);
 console.log(`importing ${sqlitePath} -> schema ${schema} (${config.chainLabel})`);
 
-await migrate(connectionString, config.chainId);
+await migrate(connectionString, config.chainId, config.schemaOverride);
 
 const src = new Database(sqlitePath, { readonly: true });
 const pool = new pg.Pool({

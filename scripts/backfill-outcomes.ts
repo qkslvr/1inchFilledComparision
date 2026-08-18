@@ -9,7 +9,7 @@ import { Db } from '../src/db/db.js';
 import { buildDecidedOutcome, OUTCOME_TICK_SQL } from '../src/report/outcome.js';
 
 const all = process.argv.includes('--all');
-const db = await Db.open(config.chainId);
+const db = await Db.open(config.chainId, { schemaOverride: config.schemaOverride });
 
 const orders = await db.all(
   `SELECT o.order_hash, o.pair, o.terminal_status, o.terminal_at_ms,
