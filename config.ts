@@ -25,15 +25,15 @@ interface ChainProfile {
   dashPortDefault: number;
   /** KyberSwap aggregator chain slug */
   kyberChainSlug: string;
-  /** Whether KalqiX quotes this chain. False means: don't sample its order
-   *  books, leave the kalqix tick columns null — but still treat the configured
-   *  pairs as fully tracked. Without this an entire chain would fall through to
-   *  the kyber-only path, which is capped at four concurrent orders. */
   /** pair ticker whose mid prices the gas asset, e.g. ETH_USDC or BNB_USDT */
   nativeTicker: string;
   /** symbol of the gas asset, and of the stable everything converts through */
   nativeSymbol: string;
   stableSymbol: string;
+  /** Venues that apply to this dataset. PancakeSwap only exists where it is
+   *  deployed, so showing its card on Ethereum just renders a permanent
+   *  "no orders". */
+  venues?: Array<'kalqix' | 'kyber' | 'bebop' | 'pancake'>;
   /** Postgres schema, when this dataset must not share the chain default. */
   schemaOverride?: string;
   /** Where orders come from. Fusion reads the 1inch feed; cow reads settled
@@ -96,6 +96,7 @@ const profiles: Record<string, ChainProfile> = {
     dashPortDefault: 8788,
     kyberChainSlug: 'ethereum',
     cowChainSlug: 'mainnet',
+    venues: ['kalqix', 'kyber', 'bebop'],
     nativeTicker: 'ETH_USDC',
     nativeSymbol: 'ETH',
     stableSymbol: 'USDC',
@@ -136,6 +137,7 @@ const profiles: Record<string, ChainProfile> = {
     nativeSymbol: 'BNB',
     stableSymbol: 'USDT',
     bebopChainSlug: 'bsc',
+    venues: ['kalqix', 'kyber', 'bebop', 'pancake'],
     pancakeQuoter: PANCAKE_QUOTER,
     pancakeFees: [100, 500, 2500, 10000],
     kyberOnlySkipPairs: [],
@@ -198,6 +200,7 @@ const profiles: Record<string, ChainProfile> = {
     dashPortDefault: 8790,
     kyberChainSlug: 'ethereum',
     cowChainSlug: 'mainnet',
+    venues: ['kalqix', 'kyber', 'bebop'],
     nativeTicker: 'ETH_USDC',
     nativeSymbol: 'ETH',
     stableSymbol: 'USDC',
@@ -355,6 +358,7 @@ export interface ResolvedChain {
   rpcUrl: string;
   schemaOverride: string | null;
   orderSource: 'fusion' | 'cow';
+  venues: Array<'kalqix' | 'kyber' | 'bebop' | 'pancake'>;
 }
 
 export const allChains: ResolvedChain[] = ['ethereum', 'bsc', 'cowswapResolver'].map((key) => {
@@ -368,6 +372,7 @@ export const allChains: ResolvedChain[] = ['ethereum', 'bsc', 'cowswapResolver']
     rpcUrl: process.env[p.rpcEnvVar] || p.rpcUrlDefault,
     schemaOverride: p.schemaOverride ?? null,
     orderSource: p.orderSource ?? 'fusion',
+    venues: p.venues ?? ['kalqix', 'kyber', 'bebop'],
   };
 });
 

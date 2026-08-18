@@ -198,7 +198,9 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
   let activeMs = 0;
   for (const r of runs) activeMs += Math.max(0, r.ended_at_ms - r.started_at_ms);
 
-  const venues = VENUES.map(({ venue, name }) => {
+  // Only the venues this dataset actually uses: a PancakeSwap card on Ethereum
+  // would read "no orders" forever.
+  const venues = VENUES.filter(({ venue }) => chain.venues.includes(venue as never)).map(({ venue, name }) => {
     const r = venueRows.get(venue);
     const decidedCount = r?.decided ?? 0;
     const wins = r?.wins ?? 0;
