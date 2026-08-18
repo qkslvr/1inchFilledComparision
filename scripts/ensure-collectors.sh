@@ -28,6 +28,14 @@ if ! pgrep -f "tsx src/dash/mai[n].ts" > /dev/null 2>&1; then
   sleep 2
 fi
 
+# cowswapResolver runs a different entrypoint: its orders come from chain logs,
+# not the 1inch feed, so it is not a run-collector.sh chain.
+if ! pgrep -f "tsx src/cow/resolve[r].ts" > /dev/null 2>&1; then
+  echo "$(date -Is) ensure: cowswapResolver not running, starting" >> logs/ensure.log
+  setsid nohup env CHAIN=cowswapResolver npx tsx src/cow/resolver.ts >> logs/collect-cow.log 2>&1 < /dev/null &
+  sleep 2
+fi
+
 for chain in ethereum bsc; do
   # The chain is an argument to run-collector.sh, so it appears in the command
   # line. The bracket keeps this pattern from matching the script's own cmdline.
