@@ -51,7 +51,7 @@ for (const venue of VENUES) {
   // out — and which asset that is depends on the direction. Reading them all as
   // the quote made a 0.42 USD trade print as 272 million.
   const pair = config.pairs.find((p) => p.ticker === row.pair);
-  const takerIsBase = row.direction === BUY_BASE;
+  const takerIsBase = row.direction === 'BUY_BASE';
   const side = pair ? (takerIsBase ? pair.base : pair.quote) : null;
   const dec = side ? side.decimals : 6;
   const sym = side ? side.symbol : config.stableSymbol;
