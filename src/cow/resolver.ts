@@ -90,37 +90,6 @@ async function evaluate(trade: CowTrade): Promise<void> {
   const buyDecimals = direction === 'SELL_BASE' ? pair.quote.decimals : pair.base.decimals;
   const buySymbol = direction === 'SELL_BASE' ? pair.quote.symbol : pair.base.symbol;
 
-  await db.insertOrder({
-    orderHash: trade.orderUid,
-    runId,
-    receivedAtMs: trade.blockTsMs,
-    source: 'poll',
-    lateSeen: false,
-    makerAsset: sellToken,
-    takerAsset: buyToken,
-    makingAmount: trade.sellAmount,
-    takingAmount: trade.buyAmount,
-    remainingMaker: trade.sellAmount,
-    makerAddress: trade.owner,
-    pair: pair.ticker,
-    direction,
-    hedgeAssetKind: null,
-    eligible: true,
-    kyberOnly: false,
-    skipReason: null,
-    sizeUsd: null,
-    auctionStartMs: null,
-    auctionDurationS: null,
-    initialRateBump: null,
-    auctionPointsJson: null,
-    gasBumpEstimate: null,
-    gasPriceEstimate: null,
-    allowPartialFills: null,
-    allowMultipleFills: null,
-    deadlineMs: null,
-    extensionRaw: null,
-    orderStructJson: null,
-  });
 
   const gasNow = gas.latest;
   const gasPriceWei = gasNow?.gasPriceWei ?? 0n;
@@ -233,6 +202,41 @@ async function evaluate(trade: CowTrade): Promise<void> {
     pancakeTier: null,
     edgePancake: null,
   };
+  // Written only now, after every venue has been asked. Inserting first and
+  // settling afterwards left the row terminal_status NULL for the length of a
+  // network call, so an already-settled trade surfaced under "being priced
+  // right now" — and stayed there forever if a quote threw.
+  await db.insertOrder({
+    orderHash: trade.orderUid,
+    runId,
+    receivedAtMs: trade.blockTsMs,
+    source: 'poll',
+    lateSeen: false,
+    makerAsset: sellToken,
+    takerAsset: buyToken,
+    makingAmount: trade.sellAmount,
+    takingAmount: trade.buyAmount,
+    remainingMaker: trade.sellAmount,
+    makerAddress: trade.owner,
+    pair: pair.ticker,
+    direction,
+    hedgeAssetKind: null,
+    eligible: true,
+    kyberOnly: false,
+    skipReason: null,
+    sizeUsd: null,
+    auctionStartMs: null,
+    auctionDurationS: null,
+    initialRateBump: null,
+    auctionPointsJson: null,
+    gasBumpEstimate: null,
+    gasPriceEstimate: null,
+    allowPartialFills: null,
+    allowMultipleFills: null,
+    deadlineMs: null,
+    extensionRaw: null,
+    orderStructJson: null,
+  });
   db.insertTick(tick);
   // Settled by definition. terminal_at_ms sits one ms after the tick so the tick
   // falls inside classify()'s decision horizon; t_actual stays null so no lead

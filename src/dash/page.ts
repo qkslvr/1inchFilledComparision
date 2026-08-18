@@ -187,6 +187,9 @@ function chainSection(c, active) {
     + '<div class="stat"><b>' + c.funnel.won + '</b><span>winnable on some venue</span><span class="usd">' + usd(c.funnel.wonUsd) + ' USD</span></div>'
     + '</div>';
 
+  // A settlement-driven dataset has no live phase — the trade is already done
+  // when we see it — so the panel is omitted rather than shown empty.
+  if (c.orderSource !== 'cow') {
   h += '<h4>Auctions being priced right now</h4>';
   h += table(['pair', '$size USD', 'auction', 'KalqiX', 'Kyber', 'Bebop', 'expires'],
     c.live.map(o => row([
@@ -196,8 +199,11 @@ function chainSection(c, active) {
       {h: chip(o.kalqix)}, {h: chip(o.kyber)}, {h: chip(o.bebop)},
       o.expires
     ])));
+  }
 
-  h += '<h4>Recently decided auctions — would we have won?</h4>';
+  h += c.orderSource === 'cow'
+    ? '<h4>Recently settled CoW trades — would another venue have paid more?</h4>'
+    : '<h4>Recently decided auctions — would we have won?</h4>';
   h += table(['ended', 'pair', '$size USD', 'result', 'KalqiX', 'Kyber', 'Bebop', 'our head start'],
     c.decided.map(o => row([
       o.time, o.pair,

@@ -216,7 +216,9 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
     };
   });
 
-  const live = liveRows.map((o) => {
+  // Settled datasets have no live phase: a trade is already done when we see
+  // it. Any row here would be one caught mid-write, so do not show it.
+  const live = (chain.orderSource === 'cow' ? [] : liveRows).map((o) => {
     const now = Date.now();
     const durMs = (o.auction_duration_s ?? 0) * 1000;
     const elapsed = o.auction_start_ms !== null ? now - o.auction_start_ms : 0;
