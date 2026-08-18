@@ -372,9 +372,12 @@ async function dbFor(chain: { chainId: number; schemaOverride?: string | null })
   return db;
 }
 
-export async function collectAll(): Promise<Record<string, unknown>> {
+export async function collectAll(datasetKey?: string): Promise<Record<string, unknown>> {
   const probe = await dbFor(config);
-  const chains = await liveChains(probe);
+  let chains = await liveChains(probe);
+  // A scoped page asks for one dataset; an unknown key yields nothing rather
+  // than silently falling back to everything.
+  if (datasetKey !== undefined) chains = chains.filter((c) => c.key === datasetKey);
   const out = await Promise.all(
     chains.map(async (chain) => collectChain(chain, await dbFor(chain)))
   );

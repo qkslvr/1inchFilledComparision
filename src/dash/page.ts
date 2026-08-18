@@ -229,7 +229,10 @@ function setChain(key) {
 
 async function refresh() {
   try {
-    const d = await (await fetch('/data.json')).json();
+    // A dataset-scoped page (/cowswapResolver) asks only for its own data, so
+    // the same markup serves both the combined view and a standalone one.
+    const scope = window.__DATASET__ ? '?dataset=' + encodeURIComponent(window.__DATASET__) : '';
+    const d = await (await fetch('/data.json' + scope)).json();
     document.getElementById('err').textContent = '';
     document.getElementById('stamp').textContent = new Date(d.now).toLocaleTimeString('en-GB') + ' · refreshes every 5s';
     if (!d.chains.some(c => c.key === activeChain)) activeChain = d.chains[0]?.key;
@@ -237,6 +240,7 @@ async function refresh() {
     // preserve open/closed state of the ops drawer across refreshes
     const openDrawers = new Set([...document.querySelectorAll('.chain')].filter(s => s.querySelector('details[open]')).map(s => s.dataset.chain));
 
+    document.getElementById('tabs').style.display = window.__DATASET__ ? 'none' : '';
     document.getElementById('tabs').innerHTML = d.chains.map(c =>
       '<button class="tab' + (c.key === activeChain ? ' active' : '') + '" data-chain="' + esc(c.key) + '" onclick="setChain(\\'' + esc(c.key) + '\\')">'
       + '<span class="dot' + (c.healthy ? '' : ' bad') + '"></span>' + esc(c.label)
