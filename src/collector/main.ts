@@ -10,7 +10,6 @@ import { PricingEngine } from '../pricing/engine.js';
 import { KyberQuoter } from '../kyber/quoter.js';
 import { BebopFeed } from '../bebop/feed.js';
 import { PancakeQuoter } from '../pancake/quoter.js';
-import { CowQuoter } from '../cow/quoter.js';
 import { Lifecycle } from './lifecycle.js';
 import { TokenResolver } from './tokens-job.js';
 import { log, logError } from '../log.js';
@@ -79,8 +78,7 @@ const samplers = new Map<string, Sampler>(
 const kyber = new KyberQuoter(() => db.event(runId, 'kyber_429', {}));
 const bebop = new BebopFeed((kind) => db.event(runId, kind, {}));
 const pancake = new PancakeQuoter();
-const cow = new CowQuoter(() => db.event(runId, 'cow_429', {}));
-const engine = new PricingEngine(db, samplers, refPrices, gas, () => skewMs, () => runId, takerFeePpm, kyber, bebop, pancake, cow);
+const engine = new PricingEngine(db, samplers, refPrices, gas, () => skewMs, () => runId, takerFeePpm, kyber, bebop, pancake);
 const lifecycle = new Lifecycle(db, client, engine, () => runId, refPrices);
 const tokenResolver = new TokenResolver(db, config.baseRpcUrl);
 
@@ -89,7 +87,6 @@ await gas.start();
 await refPrices.start();
 kyber.start();
 pancake.start();
-cow.start();
 await bebop.start();
 engine.start();
 
@@ -216,7 +213,7 @@ const status = setInterval(() => {
   }
   log(
     `status: live=${engine.liveCount} ticks/min=${ticksPerMin} samples/min ${sampleBits.join(' ')} ` +
-      `ws=${feed.state} restq=${client.limiter.pending} terminals=${lifecycle.terminalFetches} kyberq=${kyber.quoteCount} pcs=${pancake.enabled ? pancake.quoteCount : 'off'} cow=${cow.enabled ? cow.quoteCount : 'off'} bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'}` +
+      `ws=${feed.state} restq=${client.limiter.pending} terminals=${lifecycle.terminalFetches} kyberq=${kyber.quoteCount} pcs=${pancake.enabled ? pancake.quoteCount : 'off'} bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'}` +
       (db.storagePressure ? ` STORAGE-PRESSURE(${db.droppedTicks} ticks dropped)` : '')
   );
 }, 60_000);
@@ -235,7 +232,6 @@ process.on('SIGINT', () => {
   kyber.stop();
   bebop.stop();
   pancake.stop();
-  cow.stop();
   tokenResolver.stop();
   lifecycle.stop();
   stopPollFallback();

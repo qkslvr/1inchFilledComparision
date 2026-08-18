@@ -228,8 +228,7 @@ export async function computeReport(db: Db): Promise<ReportData> {
             gas_cost_raw, fee_cost, notional_taker, notional_usdc,
             kyber_out, kyber_degraded, kyber_gas_cost, kyber_fee,
             bebop_out, bebop_age_ms, bebop_degraded, bebop_gas_cost, bebop_fee,
-            pancake_out, pancake_age_ms, pancake_degraded, pancake_gas_cost, pancake_fee,
-            cow_out, cow_age_ms, cow_degraded, cow_fee
+            pancake_out, pancake_age_ms, pancake_degraded, pancake_gas_cost, pancake_fee
      FROM ticks WHERE order_hash = ANY(?) ORDER BY order_hash, ts_ms`;
 
   const defaultParams: ClassifyParams = {
