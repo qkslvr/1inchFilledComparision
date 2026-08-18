@@ -8,6 +8,7 @@ import type { GasPoller } from '../gas/poller.js';
 import type { KyberQuoter } from '../kyber/quoter.js';
 import type { BebopFeed } from '../bebop/feed.js';
 import type { PancakeQuoter } from '../pancake/quoter.js';
+import type { CowQuoter } from '../cow/quoter.js';
 import { walkBuyBaseFloat, walkSellBaseFloat } from '../bebop/depth.js';
 import { NATIVE_SENTINEL } from '../../config.js';
 import { toFloat } from './units.js';
@@ -52,6 +53,8 @@ export interface LiveOrder {
   lastTickMs?: number;
   tShadowPancakeRecorded?: boolean;
   maxEdgePancake?: bigint | null;
+  tShadowCowRecorded?: boolean;
+  maxEdgeCow?: bigint | null;
 }
 
 /** human-unit float -> token base units, floored; splits large exponents so
@@ -82,7 +85,8 @@ export class PricingEngine {
     private readonly takerFeePpm: bigint = config.kalqixTakerFeeBps * 100n,
     private readonly kyber: KyberQuoter | null = null,
     private readonly bebop: BebopFeed | null = null,
-    private readonly pancake: PancakeQuoter | null = null
+    private readonly pancake: PancakeQuoter | null = null,
+    private readonly cow: CowQuoter | null = null
   ) {}
 
   get liveCount(): number {
@@ -107,12 +111,14 @@ export class PricingEngine {
       if (!tracked) return false;
       this.orders.set(order.orderHash, order);
       this.pancake?.track(order.orderHash, order.makerAsset, order.takerAsset, amountFn);
+      this.cow?.track(order.orderHash, order.makerAsset, order.takerAsset, amountFn);
       return true;
     }
     this.orders.set(order.orderHash, order);
     this.syncSamplers();
     this.kyber?.track(order.orderHash, order.makerAsset, order.takerAsset, amountFn);
     this.pancake?.track(order.orderHash, order.makerAsset, order.takerAsset, amountFn);
+    this.cow?.track(order.orderHash, order.makerAsset, order.takerAsset, amountFn);
     return true;
   }
 
@@ -128,6 +134,7 @@ export class PricingEngine {
     this.syncSamplers();
     this.kyber?.untrack(orderHash);
     this.pancake?.untrack(orderHash);
+    this.cow?.untrack(orderHash);
   }
 
   /** Persist the running max-edge figures once, when the order stops being
@@ -140,6 +147,7 @@ export class PricingEngine {
     if (o.maxEdgeKyber !== null) this.db.setMaxEdgeKyber(o.orderHash, o.maxEdgeKyber);
     if (o.maxEdgeBebop !== null) this.db.setMaxEdgeBebop(o.orderHash, o.maxEdgeBebop);
     if (o.maxEdgePancake != null) this.db.setMaxEdgePancake(o.orderHash, o.maxEdgePancake);
+    if (o.maxEdgeCow != null) this.db.setMaxEdgeCow(o.orderHash, o.maxEdgeCow);
   }
 
   start(): void {
@@ -383,6 +391,7 @@ export class PricingEngine {
 
     const pancake = this.pricePancake(o, nowMs, auctionCost, notionalTaker, gasCostRaw, gasPriceWei,
       (wei) => this.weiToTakerAsset(wei, o));
+    const cow = this.priceCow(o, nowMs, auctionCost, notionalTaker, gasCostRaw);
 
     return {
       orderHash: o.orderHash,
@@ -419,6 +428,7 @@ export class PricingEngine {
       bebopFee,
       edgeBebop,
       ...pancake,
+      ...cow,
     };
   }
 
@@ -500,6 +510,7 @@ export class PricingEngine {
     }
 
     const pancake = this.pricePancake(o, nowMs, auctionCost, auctionCost, fillGas, gasPriceWei, weiToTakerViaQuote);
+    const cow = this.priceCow(o, nowMs, auctionCost, auctionCost, fillGas);
 
     return {
       orderHash: o.orderHash,
@@ -536,6 +547,53 @@ export class PricingEngine {
       bebopFee,
       edgeBebop,
       ...pancake,
+      ...cow,
+    };
+  }
+
+  /** CoW Swap leg.
+   *
+   *  The important difference from Kyber: CoW's buyAmount is already net of its
+   *  own fee, because it settles the trade itself and deducts that from the sell
+   *  side. So no swap-leg gas is added here. Charging CoW its gas the way Kyber
+   *  is charged would bill it twice and understate it by roughly the cost of a
+   *  swap. Its gas estimate is still recorded, for diagnosis only. */
+  private priceCow(
+    o: LiveOrder,
+    nowMs: number,
+    auctionCost: bigint,
+    notionalTaker: bigint,
+    gasCostRaw: bigint | null
+  ): {
+    cowOut: bigint | null;
+    cowFeeAmount: bigint | null;
+    cowGasUnits: bigint | null;
+    cowAgeMs: number | null;
+    cowDegraded: boolean | null;
+    cowFee: bigint | null;
+    edgeCow: bigint | null;
+  } {
+    const empty = {
+      cowOut: null, cowFeeAmount: null, cowGasUnits: null, cowAgeMs: null,
+      cowDegraded: null, cowFee: null, edgeCow: null,
+    };
+    const quote = this.cow?.latest.get(o.orderHash);
+    if (!quote) return empty;
+    const ageMs = nowMs - quote.receivedAtMs;
+    const degraded = ageMs > config.cow.degradedQuoteAgeMs || quote.amountIn !== o.remainingMaker;
+    const fee = bpsOfCeil(quote.amountOut, config.cow.feeBps);
+    return {
+      cowOut: quote.amountOut,
+      cowFeeAmount: quote.feeAmount,
+      cowGasUnits: quote.gasUnits,
+      cowAgeMs: ageMs,
+      cowDegraded: degraded,
+      cowFee: fee,
+      edgeCow:
+        gasCostRaw === null
+          ? null
+          : quote.amountOut - auctionCost - gasCostRaw - fee -
+            bpsOfCeil(notionalTaker, config.safetyMarginBps),
     };
   }
 
@@ -645,6 +703,15 @@ export class PricingEngine {
       }
       if (o.maxEdgeKyber === null || tick.edgeKyber > o.maxEdgeKyber) {
         o.maxEdgeKyber = tick.edgeKyber;
+      }
+    }
+    if (tick.edgeCow !== null) {
+      if (tick.edgeCow > 0n && !tick.exclusive && !o.tShadowCowRecorded) {
+        o.tShadowCowRecorded = true;
+        this.db.setShadowCow(o.orderHash, tick.tsMs, tick.edgeCow);
+      }
+      if (o.maxEdgeCow == null || tick.edgeCow > o.maxEdgeCow) {
+        o.maxEdgeCow = tick.edgeCow;
       }
     }
     if (tick.edgePancake !== null) {

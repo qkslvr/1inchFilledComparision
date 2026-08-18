@@ -1,6 +1,6 @@
 import { mulDivCeil } from '../pricing/units.js';
 
-export type Venue = 'kalqix' | 'kyber' | 'bebop' | 'pancake';
+export type Venue = 'kalqix' | 'kyber' | 'bebop' | 'pancake' | 'cow';
 
 /** Raw tick row (SQLite column names) -> venue-specific TickData for classify().
  *  KalqiX: book-walk proceeds, venue taker fee, fill gas.
@@ -33,6 +33,20 @@ export function tickForVenue(t: Record<string, any>, venue: Venue): TickData {
       hedgeProceeds: hasData ? BigInt(t.bebop_out) : null,
       gasCostRaw: hasData ? BigInt(t.gas_cost_raw) + BigInt(t.bebop_gas_cost) : base.gasCostRaw,
       feeCost: hasData && t.bebop_fee !== null ? BigInt(t.bebop_fee) : null,
+    };
+  }
+  if (venue === 'cow') {
+    const hasQuote = t.cow_out !== null && t.cow_out !== undefined;
+    return {
+      ...base,
+      degraded: t.cow_degraded === 1,
+      insufficientDepth: false,
+      hedgeProceeds: hasQuote ? BigInt(t.cow_out) : null,
+      // No swap-leg gas: CoW settles the trade itself and has already charged
+      // for that inside the fee, which buyAmount is net of. Adding its gas here
+      // the way Kyber does would bill CoW twice. See SPEC-cowswap.md.
+      gasCostRaw: base.gasCostRaw,
+      feeCost: hasQuote && t.cow_fee !== null ? BigInt(t.cow_fee) : null,
     };
   }
   if (venue === 'pancake') {

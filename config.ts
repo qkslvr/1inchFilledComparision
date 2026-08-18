@@ -34,6 +34,8 @@ interface ChainProfile {
   /** symbol of the gas asset, and of the stable everything converts through */
   nativeSymbol: string;
   stableSymbol: string;
+  /** CoW Protocol network slug, on chains where it runs. */
+  cowChainSlug?: string;
   /** Bebop stream slug, where it differs from the Kyber one. */
   bebopChainSlug?: string;
   /** PancakeSwap V3 QuoterV2, on chains where it is deployed. */
@@ -86,6 +88,7 @@ const profiles: Record<string, ChainProfile> = {
     rpcUrlDefault: 'https://ethereum-rpc.publicnode.com',
     dashPortDefault: 8788,
     kyberChainSlug: 'ethereum',
+    cowChainSlug: 'mainnet',
     nativeTicker: 'ETH_USDC',
     nativeSymbol: 'ETH',
     stableSymbol: 'USDC',
@@ -218,6 +221,19 @@ export const config = {
     degradedAgeMs: 5000,
     /** the stream is chatty (all pairs, sub-second); a minute of silence = dead socket */
     staleReconnectMs: 60_000,
+  },
+  cow: {
+    apiBase: 'https://api.cow.fi',
+    chainSlug: profile.cowChainSlug ?? null,
+    /** Quotes need a from/receiver to be returned; nothing is ever signed or
+     *  submitted, this only reads a price. */
+    quoteFrom: '0x0000000000000000000000000000000000000001',
+    /** our assumed markup on a CoW-hedged fill, same basis as the others */
+    feeBps: 3n,
+    quoteIntervalMs: 2000,
+    quoteTimeoutMs: 5000,
+    /** a tick using a quote older than this, or for a stale size, is degraded */
+    degradedQuoteAgeMs: 5000,
   },
   pancake: {
     /** our assumed markup on a PancakeSwap-hedged fill, same basis as the others */

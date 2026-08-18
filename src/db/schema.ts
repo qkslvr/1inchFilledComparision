@@ -31,6 +31,17 @@ export const MIGRATIONS: string[] = [
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS t_shadow_pancake_ms BIGINT`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS t_shadow_pancake_edge TEXT`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS max_edge_pancake TEXT`,
+  // CoW Swap, added as a fifth venue on Ethereum.
+  `ALTER TABLE ticks ADD COLUMN IF NOT EXISTS cow_out TEXT`,
+  `ALTER TABLE ticks ADD COLUMN IF NOT EXISTS cow_fee_amount TEXT`,
+  `ALTER TABLE ticks ADD COLUMN IF NOT EXISTS cow_gas_units TEXT`,
+  `ALTER TABLE ticks ADD COLUMN IF NOT EXISTS cow_age_ms INTEGER`,
+  `ALTER TABLE ticks ADD COLUMN IF NOT EXISTS cow_degraded SMALLINT`,
+  `ALTER TABLE ticks ADD COLUMN IF NOT EXISTS cow_fee TEXT`,
+  `ALTER TABLE ticks ADD COLUMN IF NOT EXISTS edge_cow TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS t_shadow_cow_ms BIGINT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS t_shadow_cow_edge TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS max_edge_cow TEXT`,
 ];
 
 export const SCHEMA = `
@@ -91,6 +102,9 @@ CREATE TABLE IF NOT EXISTS orders (
   t_shadow_pancake_ms   BIGINT,
   t_shadow_pancake_edge TEXT,
   max_edge_pancake      TEXT,
+  t_shadow_cow_ms       BIGINT,
+  t_shadow_cow_edge     TEXT,
+  max_edge_cow          TEXT,
   max_edge             TEXT,
   max_edge_ms          BIGINT,
   -- outcome
@@ -181,7 +195,14 @@ CREATE TABLE IF NOT EXISTS ticks (
   pancake_gas_cost TEXT,
   pancake_fee      TEXT,
   pancake_tier     INTEGER,
-  edge_pancake     TEXT
+  edge_pancake     TEXT,
+  cow_out          TEXT,
+  cow_fee_amount   TEXT,
+  cow_gas_units    TEXT,
+  cow_age_ms       INTEGER,
+  cow_degraded     SMALLINT,
+  cow_fee          TEXT,
+  edge_cow         TEXT
 );
 -- One index, not two. order_hash is a 66-character string, so every index on it
 -- costs ~100 bytes a row; a second one made the ticks indexes larger than the

@@ -143,6 +143,13 @@ export interface TickInsert {
   pancakeFee: bigint | null;
   pancakeTier: number | null;
   edgePancake: bigint | null;
+  cowOut: bigint | null;
+  cowFeeAmount: bigint | null;
+  cowGasUnits: bigint | null;
+  cowAgeMs: number | null;
+  cowDegraded: boolean | null;
+  cowFee: bigint | null;
+  edgeCow: bigint | null;
 }
 
 export interface VenueOutcomeInsert {
@@ -506,6 +513,18 @@ export class Db {
     this.enqueue(`UPDATE orders SET max_edge_pancake = ? WHERE order_hash = ?`, [s(edge), orderHash]);
   }
 
+  setShadowCow(orderHash: string, tsMs: number, edge: bigint): void {
+    this.enqueue(
+      `UPDATE orders SET t_shadow_cow_ms = ?, t_shadow_cow_edge = ?
+       WHERE order_hash = ? AND t_shadow_cow_ms IS NULL`,
+      [tsMs, s(edge), orderHash]
+    );
+  }
+
+  setMaxEdgeCow(orderHash: string, edge: bigint): void {
+    this.enqueue(`UPDATE orders SET max_edge_cow = ? WHERE order_hash = ?`, [s(edge), orderHash]);
+  }
+
   setActualWsTime(orderHash: string, tsMs: number): void {
     this.enqueue(
       `UPDATE orders SET t_actual_ws_ms = ? WHERE order_hash = ? AND t_actual_ws_ms IS NULL`,
@@ -610,8 +629,9 @@ export class Db {
         partial_best_qty, partial_best_edge,
         kyber_out, kyber_amount_in, kyber_quote_age_ms, kyber_degraded, kyber_gas_cost, kyber_fee, edge_kyber,
         bebop_out, bebop_age_ms, bebop_degraded, bebop_gas_cost, bebop_fee, edge_bebop,
-        pancake_out, pancake_age_ms, pancake_degraded, pancake_gas_cost, pancake_fee, pancake_tier, edge_pancake
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        pancake_out, pancake_age_ms, pancake_degraded, pancake_gas_cost, pancake_fee, pancake_tier, edge_pancake,
+        cow_out, cow_fee_amount, cow_gas_units, cow_age_ms, cow_degraded, cow_fee, edge_cow
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         t.orderHash,
         t.tsMs,
@@ -653,6 +673,13 @@ export class Db {
         s(t.pancakeFee),
         t.pancakeTier,
         s(t.edgePancake),
+        s(t.cowOut),
+        s(t.cowFeeAmount),
+        s(t.cowGasUnits),
+        t.cowAgeMs,
+        t.cowDegraded === null ? null : t.cowDegraded ? 1 : 0,
+        s(t.cowFee),
+        s(t.edgeCow),
       ]
     );
   }
