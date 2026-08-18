@@ -346,33 +346,35 @@ async function venueScoreboard(db: Db): Promise<Map<string, Record<string, any>>
 async function liveChains(probe: Db): Promise<ResolvedChain[]> {
   const rows = (await probe.all(
     `SELECT schema_name FROM information_schema.schemata WHERE schema_name = ANY(?)`,
-    [allChains.map((c) => schemaFor(c.chainId))]
+    [allChains.map((c) => schemaFor(c.chainId, c.schemaOverride))]
   )) as Array<{ schema_name: string }>;
   const present = new Set(rows.map((r) => r.schema_name));
-  return allChains.filter((c) => present.has(schemaFor(c.chainId)));
+  return allChains.filter((c) => present.has(schemaFor(c.chainId, c.schemaOverride)));
 }
 
 /** Connections are cached per module instance: a warm serverless instance
  *  reuses them, a cold one pays a single connect. */
-const pools = new Map<number, Db>();
+/** Keyed by schema, not chain id: CoW and Fusion share chain 1. */
+const pools = new Map<string, Db>();
 
-async function dbFor(chainId: number): Promise<Db> {
-  let db = pools.get(chainId);
+async function dbFor(chain: { chainId: number; schemaOverride?: string | null }): Promise<Db> {
+  const key = schemaFor(chain.chainId, chain.schemaOverride);
+  let db = pools.get(key);
   if (!db) {
     // Each chain's queries go out as one parallel wave, so the pool needs room
     // for them; with max: 1 they would queue on a single connection and pay the
     // round trip serially anyway.
-    db = await Db.open(chainId, { readonly: true, max: 6 });
-    pools.set(chainId, db);
+    db = await Db.open(chain.chainId, { readonly: true, max: 6, schemaOverride: chain.schemaOverride });
+    pools.set(key, db);
   }
   return db;
 }
 
 export async function collectAll(): Promise<Record<string, unknown>> {
-  const probe = await dbFor(config.chainId);
+  const probe = await dbFor(config);
   const chains = await liveChains(probe);
   const out = await Promise.all(
-    chains.map(async (chain) => collectChain(chain, await dbFor(chain.chainId)))
+    chains.map(async (chain) => collectChain(chain, await dbFor(chain)))
   );
   return { now: new Date().toISOString(), chains: out };
 }

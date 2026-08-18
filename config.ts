@@ -34,6 +34,11 @@ interface ChainProfile {
   /** symbol of the gas asset, and of the stable everything converts through */
   nativeSymbol: string;
   stableSymbol: string;
+  /** Postgres schema, when this dataset must not share the chain default. */
+  schemaOverride?: string;
+  /** Where orders come from. Fusion reads the 1inch feed; cow reads settled
+   *  CoW trades from chain logs, which is a price comparison, not a race. */
+  orderSource?: 'fusion' | 'cow';
   /** CoW Protocol network slug, on chains where it runs. */
   cowChainSlug?: string;
   /** Bebop stream slug, where it differs from the Kyber one. */
@@ -137,16 +142,56 @@ const profiles: Record<string, ChainProfile> = {
       'USDT on BNB Chain is 18-decimal, unlike the 6-decimal USDC used on Ethereum. USD figures are converted accordingly but are not directly comparable line-for-line with the Ethereum report.',
     ],
   },
+  // Same chain and same pairs as 'ethereum', but the orders come from settled
+  // CoW trades rather than the 1inch feed, and land in their own schema. The
+  // question inverts: not "could we have filled this Fusion order first", but
+  // "did the winning CoW solver leave money on the table".
+  cowswapResolver: {
+    chainId: 1,
+    label: 'CoW Swap Ethereum',
+    schemaOverride: 'cowswap_1',
+    orderSource: 'cow',
+    wethAddress: WETH_ETHEREUM,
+    pairs: [
+      {
+        ticker: 'ETH_USDC',
+        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
+        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ETHEREUM] },
+        kalqix: { ticker: 'ETH_USDC', baseDecimals: 18, quoteDecimals: 6 },
+      },
+      {
+        ticker: 'cbBTC_USDC',
+        base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
+        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ETHEREUM] },
+        kalqix: { ticker: 'cbBTC_USDC', baseDecimals: 8, quoteDecimals: 6 },
+      },
+    ],
+    rpcEnvVar: 'ETH_RPC_URL',
+    rpcUrlDefault: 'https://ethereum.publicnode.com',
+    dashPortDefault: 8790,
+    kyberChainSlug: 'ethereum',
+    cowChainSlug: 'mainnet',
+    nativeTicker: 'ETH_USDC',
+    nativeSymbol: 'ETH',
+    stableSymbol: 'USDC',
+    kyberOnlySkipPairs: [],
+    reportCaveats: [
+      'Orders here are CoW trades that have already settled: CoW\'s open-order endpoint is solver-only, so they cannot be observed while live. This is therefore a price comparison, not a race — there is no lead time and no "profitable too late" verdict, because we never saw the order in flight.',
+      'Venue quotes are necessarily taken after the settling block. The lag is recorded per tick and a comparison beyond the degraded threshold is marked as such.',
+    ],
+  },
 };
 profiles.eth = profiles.ethereum!;
 profiles.bnb = profiles.bsc!;
+profiles.cowswapresolver = profiles.cowswapResolver!;
+profiles.cow = profiles.cowswapResolver!;
 
 // `||`, not `??`: .env.example ships CHAIN= as an empty placeholder, and the
 // loader above turns that into '' rather than leaving it unset.
 const chainName = (process.env.CHAIN || 'ethereum').toLowerCase();
 const profile = profiles[chainName];
 if (!profile) {
-  throw new Error(`unknown CHAIN "${chainName}" (expected: ethereum, bsc)`);
+  throw new Error(`unknown CHAIN "${chainName}" (expected: ethereum, bsc, cowswapresolver)`);
 }
 
 /** unordered-pair keys ("a|b", lowercase-sorted) for the kyber-only skip list */
@@ -162,6 +207,8 @@ export const config = {
   chainId: profile.chainId,
   chainLabel: profile.label,
   hasKalqix: profile.pairs.some((p) => p.kalqix !== undefined),
+  schemaOverride: profile.schemaOverride ?? null,
+  orderSource: profile.orderSource ?? 'fusion',
   nativeTicker: profile.nativeTicker,
   nativeSymbol: profile.nativeSymbol,
   stableSymbol: profile.stableSymbol,
@@ -233,6 +280,10 @@ export const config = {
     quoteIntervalMs: 2000,
     quoteTimeoutMs: 5000,
     degradedQuoteAgeMs: 5000,
+    /** how often to look for newly settled trades; ~one Ethereum block */
+    settlementPollMs: 12_000,
+    /** cap on blocks per getLogs call, so a long outage backfills gradually */
+    maxBlockSpan: 200,
   },
   pancake: {
     /** our assumed markup on a PancakeSwap-hedged fill, same basis as the others */
@@ -275,9 +326,11 @@ export interface ResolvedChain {
   wethAddress: string;
   pairs: PairConfig[];
   rpcUrl: string;
+  schemaOverride: string | null;
+  orderSource: 'fusion' | 'cow';
 }
 
-export const allChains: ResolvedChain[] = ['ethereum', 'bsc'].map((key) => {
+export const allChains: ResolvedChain[] = ['ethereum', 'bsc', 'cowswapResolver'].map((key) => {
   const p = profiles[key]!;
   return {
     key,
@@ -286,6 +339,8 @@ export const allChains: ResolvedChain[] = ['ethereum', 'bsc'].map((key) => {
     wethAddress: p.wethAddress,
     pairs: p.pairs,
     rpcUrl: process.env[p.rpcEnvVar] || p.rpcUrlDefault,
+    schemaOverride: p.schemaOverride ?? null,
+    orderSource: p.orderSource ?? 'fusion',
   };
 });
 

@@ -167,9 +167,13 @@ export interface DecidedOutcomeInsert {
 
 /** Create the chain's schema and tables. Collector-side only: the Vercel reader
  *  connects with a role that has no DDL rights. */
-export async function migrate(connectionString: string, chainId: number): Promise<void> {
+export async function migrate(
+  connectionString: string,
+  chainId: number,
+  schemaOverride?: string | null
+): Promise<void> {
   assertUsableHost(connectionString);
-  const schema = schemaFor(chainId);
+  const schema = schemaFor(chainId, schemaOverride);
   const pool = new Pool({ connectionString, ssl: sslFor(connectionString), max: 1 });
   try {
     await pool.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
@@ -216,7 +220,7 @@ export class Db {
    *  instance, and Railway Postgres ships without a connection pooler. */
   static async open(
     chainId: number,
-    opts: { readonly?: boolean; connectionString?: string; max?: number } = {}
+    opts: { readonly?: boolean; connectionString?: string; max?: number; schemaOverride?: string | null } = {}
   ): Promise<Db> {
     const connectionString = opts.connectionString ?? process.env.DATABASE_URL;
     if (!connectionString) {
@@ -224,14 +228,14 @@ export class Db {
     }
     assertUsableHost(connectionString);
     const readonly_ = opts.readonly ?? false;
-    if (!readonly_) await migrate(connectionString, chainId);
+    if (!readonly_) await migrate(connectionString, chainId, opts.schemaOverride);
     const pool = new Pool({
       connectionString,
       ssl: sslFor(connectionString),
       max: opts.max ?? (readonly_ ? 2 : 4),
       // every connection lands in this chain's schema, so the queries below stay
       // unqualified exactly as they were against a per-chain SQLite file
-      options: `-c search_path=${schemaFor(chainId)}`,
+      options: `-c search_path=${schemaFor(chainId, opts.schemaOverride)}`,
     });
     return new Db(pool, chainId, readonly_);
   }

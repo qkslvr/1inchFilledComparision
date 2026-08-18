@@ -10,9 +10,14 @@
  *  arrive as JS numbers rather than pg's default strings.
  */
 
-/** Postgres schema name for a chain id. */
-export function schemaFor(chainId: number): string {
-  return `chain_${chainId}`;
+/** Postgres schema name for a dataset.
+ *
+ *  Usually derived from the chain id, but two datasets can share a chain — CoW
+ *  settlements and Fusion orders are both Ethereum — so a profile may override
+ *  it. That keeps them in separate schemas without a discriminator column on
+ *  every table. */
+export function schemaFor(chainId: number, override?: string | null): string {
+  return override ?? `chain_${chainId}`;
 }
 
 /** Additive DDL applied on collector boot. Postgres supports IF NOT EXISTS on
