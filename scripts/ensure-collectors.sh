@@ -28,6 +28,15 @@ if ! pgrep -f "tsx src/dash/mai[n].ts" > /dev/null 2>&1; then
   sleep 2
 fi
 
+# The Bebop relay owns the single pricing socket the API key allows on chain 1.
+# Both Ethereum consumers read from it, so it must be up before they are useful
+# — without it they report bebop=disconnected and every tick records "no data".
+if ! pgrep -f "tsx src/bebop/rela[y].ts" > /dev/null 2>&1; then
+  echo "$(date -Is) ensure: bebop relay not running, starting" >> logs/ensure.log
+  setsid nohup env CHAIN=ethereum npx tsx src/bebop/relay.ts >> logs/bebop-relay.log 2>&1 < /dev/null &
+  sleep 3
+fi
+
 # cowswapResolver runs a different entrypoint: its orders come from chain logs,
 # not the 1inch feed, so it is not a run-collector.sh chain.
 if ! pgrep -f "tsx src/cow/resolve[r].ts" > /dev/null 2>&1; then

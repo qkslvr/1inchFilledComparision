@@ -6,7 +6,7 @@ import { costAt, isExclusiveAt, rateBumpAt } from '../fusion/auction.js';
 import type { Sampler, RefPriceLoop } from '../kalqix/sampler.js';
 import type { GasPoller } from '../gas/poller.js';
 import type { KyberQuoter } from '../kyber/quoter.js';
-import type { BebopFeed } from '../bebop/feed.js';
+import type { BebopSource } from '../bebop/feed.js';
 import type { PancakeQuoter } from '../pancake/quoter.js';
 import { walkBuyBaseFloat, walkSellBaseFloat } from '../bebop/depth.js';
 import { NATIVE_SENTINEL } from '../../config.js';
@@ -81,7 +81,7 @@ export class PricingEngine {
     /** KalqiX taker fee in ppm; config default or the account's live effective rate. */
     private readonly takerFeePpm: bigint = config.kalqixTakerFeeBps * 100n,
     private readonly kyber: KyberQuoter | null = null,
-    private readonly bebop: BebopFeed | null = null,
+    private readonly bebop: BebopSource | null = null,
     private readonly pancake: PancakeQuoter | null = null
   ) {}
 

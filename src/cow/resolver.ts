@@ -25,7 +25,7 @@ import { GasPoller } from '../gas/poller.js';
 import { RefPriceLoop, Sampler } from '../kalqix/sampler.js';
 import { chooseBookFetcher } from '../kalqix/client.js';
 import { fetchKyberQuote } from '../kyber/client.js';
-import { BebopFeed } from '../bebop/feed.js';
+import { createBebopSource } from '../bebop/source.js';
 import { walkBuyBaseFloat, walkSellBaseFloat } from '../bebop/depth.js';
 import { walkBuyBase, walkSellBase } from '../kalqix/book.js';
 import { SettlementFeed, type CowTrade } from './settlements.js';
@@ -50,7 +50,7 @@ const gas = new GasPoller(
   () => db.event(runId, 'rpc_error', { source: 'gas_poll' })
 );
 const refPrices = new RefPriceLoop(db);
-const bebop = new BebopFeed((kind) => db.event(runId, kind, {}));
+const bebop = createBebopSource((kind) => db.event(runId, kind, {}));
 const { fetcher: bookFetcher } = config.hasKalqix
   ? await chooseBookFetcher(log)
   : { fetcher: undefined };

@@ -14,13 +14,28 @@ export interface BebopBook {
   streamTsMs: number;
 }
 
+/** What a consumer needs from Bebop, independent of how the books arrive.
+ *  BebopFeed holds a socket; BebopRelayFeed mirrors one held elsewhere. */
+export interface BebopSource {
+  readonly books: Map<string, BebopBook>;
+  readonly decimals: Map<string, number>;
+  state: 'idle' | 'connecting' | 'connected' | 'disconnected' | 'stopped';
+  messageCount: number;
+  staleReconnects: number;
+  readonly enabled: boolean;
+  start(): Promise<void>;
+  stop(): void;
+  bookFor(tokenA: string, tokenB: string): { book: BebopBook; aIsBase: boolean } | null;
+  decimalsFor(token: string): number | null;
+}
+
 const BACKOFF_MIN_MS = 1000;
 const BACKOFF_MAX_MS = 30_000;
 
 /** Bebop Price API consumer: one socket per chain, full-snapshot stream of all
  *  MM-quoted pairs (no subscription protocol). Sanctioned for continuous
  *  liquidity evaluation, unlike polling their RFQ quote endpoint. */
-export class BebopFeed {
+export class BebopFeed implements BebopSource {
   /** `${base}|${quote}` (lowercase) -> latest levels */
   readonly books = new Map<string, BebopBook>();
   /** token address -> decimals, from the venue tokenlist */

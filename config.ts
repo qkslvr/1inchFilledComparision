@@ -48,6 +48,10 @@ interface ChainProfile {
   cowChainSlug?: string;
   /** Bebop stream slug, where it differs from the Kyber one. */
   bebopChainSlug?: string;
+  /** How this dataset gets Bebop books. The key allows one live socket per
+   *  chain, so any chain with two collectors must put both behind the relay.
+   *  Defaults to holding the socket directly. */
+  bebopMode?: 'stream' | 'relay';
   /** PancakeSwap V3 QuoterV2, on chains where it is deployed. */
   pancakeQuoter?: string;
   /** PancakeSwap V3 fee tiers, in hundredths of a bip. */
@@ -101,6 +105,9 @@ const profiles: Record<string, ChainProfile> = {
     dashPortDefault: 8788,
     kyberChainSlug: 'ethereum',
     cowChainSlug: 'mainnet',
+    // Shares chain 1 with cowswapResolver, and the key allows one socket per
+    // chain: both read from the relay so neither can lock the other out.
+    bebopMode: 'relay',
     venues: ['kalqix', 'kyber', 'bebop'],
     nativeTicker: 'ETH_USDC',
     nativeSymbol: 'ETH',
@@ -209,6 +216,9 @@ const profiles: Record<string, ChainProfile> = {
     dashPortDefault: 8790,
     kyberChainSlug: 'ethereum',
     cowChainSlug: 'mainnet',
+    // Shares chain 1 with cowswapResolver, and the key allows one socket per
+    // chain: both read from the relay so neither can lock the other out.
+    bebopMode: 'relay',
     venues: ['kalqix', 'kyber', 'bebop'],
     nativeTicker: 'ETH_USDC',
     nativeSymbol: 'ETH',
@@ -308,6 +318,13 @@ export const config = {
     degradedAgeMs: 5000,
     /** the stream is chatty (all pairs, sub-second); a minute of silence = dead socket */
     staleReconnectMs: 60_000,
+    mode: profile.bebopMode ?? 'stream',
+    /** loopback only — the relay must never be reachable from outside the box */
+    relayPort: Number(process.env.BEBOP_RELAY_PORT ?? 8790),
+    /** Well inside degradedAgeMs, so a book is never called stale merely for
+     *  having taken the loopback hop. */
+    relayPollMs: 500,
+    relayTimeoutMs: 4000,
   },
   // CoW Protocol. Kept for the order-source work: the quote endpoint is public
   // and needs no key. Note /auction — the open-order set — is solver-only (403).

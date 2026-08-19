@@ -8,7 +8,7 @@ import { chooseBookFetcher, fetchMyFees } from '../kalqix/client.js';
 import { kalqixCreds } from '../kalqix/auth.js';
 import { PricingEngine } from '../pricing/engine.js';
 import { KyberQuoter } from '../kyber/quoter.js';
-import { BebopFeed } from '../bebop/feed.js';
+import { createBebopSource } from '../bebop/source.js';
 import { PancakeQuoter } from '../pancake/quoter.js';
 import { Lifecycle } from './lifecycle.js';
 import { TokenResolver } from './tokens-job.js';
@@ -76,7 +76,7 @@ const samplers = new Map<string, Sampler>(
   config.pairs.filter((p) => p.kalqix).map((p) => [p.ticker, new Sampler(p, db, () => runId, bookFetcher)])
 );
 const kyber = new KyberQuoter(() => db.event(runId, 'kyber_429', {}));
-const bebop = new BebopFeed((kind) => db.event(runId, kind, {}));
+const bebop = createBebopSource((kind) => db.event(runId, kind, {}));
 const pancake = new PancakeQuoter();
 const engine = new PricingEngine(db, samplers, refPrices, gas, () => skewMs, () => runId, takerFeePpm, kyber, bebop, pancake);
 const lifecycle = new Lifecycle(db, client, engine, () => runId, refPrices);
