@@ -96,7 +96,7 @@ export class SettlementFeed {
 
   constructor(
     private readonly onTrade: (t: CowTrade) => void,
-    private readonly confirmations = 3
+    private readonly confirmations = config.cow.confirmations
   ) {}
 
   async start(): Promise<void> {

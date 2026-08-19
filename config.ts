@@ -160,7 +160,10 @@ const profiles: Record<string, ChainProfile> = {
     label: 'CoW Swap Ethereum',
     schemaOverride: 'cowswap_1',
     orderSource: 'cow',
-    quoteLagToleranceMs: 30_000,
+    // Above the ~15s structural floor, so it separates clean samples from
+    // lagged ones. At 30s it sat below the old 41s floor and flagged every
+    // single tick, which made the signal useless.
+    quoteLagToleranceMs: 25_000,
     wethAddress: WETH_ETHEREUM,
     pairs: [
       {
@@ -317,8 +320,16 @@ export const config = {
     quoteIntervalMs: 2000,
     quoteTimeoutMs: 5000,
     degradedQuoteAgeMs: 5000,
-    /** how often to look for newly settled trades; ~one Ethereum block */
-    settlementPollMs: 12_000,
+    /** How often to look for newly settled trades. Every 12s meant a trade
+     *  could sit unseen for a block; the comparison is only as good as how
+     *  quickly we can price it. */
+    settlementPollMs: 3_000,
+    /** Blocks to stay behind the head. Three cost ~36s of price drift against a
+     *  signal of 10-18 bps — the same order of magnitude — so the reorg
+     *  protection was more expensive than the risk it bought. One block still
+     *  rejects the common case; a deep reorg would leave a record of a trade
+     *  that did not happen, which is the accepted trade. */
+    confirmations: 1,
     /** cap on blocks per getLogs call, so a long outage backfills gradually */
     maxBlockSpan: 200,
   },
