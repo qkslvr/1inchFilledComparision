@@ -30,7 +30,7 @@ export interface BebopSource {
 }
 
 const BACKOFF_MIN_MS = 1000;
-const BACKOFF_MAX_MS = 30_000;
+const BACKOFF_MAX_MS = config.bebop.reconnectMaxMs;
 
 /** Bebop Price API consumer: one socket per chain, full-snapshot stream of all
  *  MM-quoted pairs (no subscription protocol). Sanctioned for continuous

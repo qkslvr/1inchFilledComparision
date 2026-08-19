@@ -318,6 +318,11 @@ export const config = {
     degradedAgeMs: 5000,
     /** the stream is chatty (all pairs, sub-second); a minute of silence = dead socket */
     staleReconnectMs: 60_000,
+    /** Ceiling on reconnect backoff. Was 30s, which meant a stream returning
+     *  503 for hours was still being knocked on 120 times an hour — and a
+     *  reconnect storm is a plausible way to get throttled in the first place.
+     *  Two minutes still notices a recovery quickly enough. */
+    reconnectMaxMs: 120_000,
     mode: profile.bebopMode ?? 'stream',
     /** loopback only — the relay must never be reachable from outside the box */
     relayPort: Number(process.env.BEBOP_RELAY_PORT ?? 8790),
