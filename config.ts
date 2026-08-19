@@ -353,6 +353,9 @@ export const config = {
     fallbackGasUnits: 400_000n,
     quoteIntervalMs: 2000,
     quoteTimeoutMs: 4000,
+    /** retries for one-shot callers on a 429 or timeout; the Fusion loop passes
+     *  none, because its next tick is 2s away. */
+    quoteRetries: 2,
     /** a tick using a quote older than this (or for a stale size) is kyber-degraded */
     degradedQuoteAgeMs: 5000,
     /** cap on concurrent per-order quote loops (rate-limit guard) */

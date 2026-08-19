@@ -25,9 +25,39 @@ function parseUsd6(v: string | undefined): bigint | null {
   return BigInt(Math.round(f * 1e6));
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /** GET /{chain}/api/v1/routes — quote only, never builds calldata. Amounts are
- *  base-unit decimal strings; native ETH sentinel is accepted directly. */
+ *  base-unit decimal strings; native ETH sentinel is accepted directly.
+ *
+ *  `retries` defaults to none. The Fusion collector re-quotes every 2s anyway,
+ *  so a 429 there costs one tick out of hundreds and retrying would only add
+ *  load to the thing that just rate-limited us. A one-shot caller — the CoW
+ *  resolver, which gets exactly one chance at each settled trade — has the
+ *  opposite trade-off: giving up writes a permanent "no data". */
 export async function fetchKyberQuote(
+  tokenIn: string,
+  tokenOut: string,
+  amountIn: bigint,
+  opts: { retries?: number } = {}
+): Promise<KyberQuote> {
+  const retries = opts.retries ?? 0;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await quoteOnce(tokenIn, tokenOut, amountIn);
+    } catch (err) {
+      // Only back off for the transient shapes. An unusable quote or a 4xx that
+      // is not 429 will fail identically next time.
+      const transient =
+        err instanceof KyberRateLimitError ||
+        (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError'));
+      if (!transient || attempt >= retries) throw err;
+      await sleep(400 * 3 ** attempt);
+    }
+  }
+}
+
+async function quoteOnce(
   tokenIn: string,
   tokenOut: string,
   amountIn: bigint

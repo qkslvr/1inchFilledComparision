@@ -155,7 +155,11 @@ async function evaluateInner(
   let kyberFee: bigint | null = null;
   let edgeKyber: bigint | null = null;
   try {
-    const q = await fetchKyberQuote(sellToken, buyToken, trade.sellAmount);
+    // One chance per settled trade: unlike the Fusion loop there is no next
+    // tick to recover on, so absorb a 429 rather than record 'no data'.
+    const q = await fetchKyberQuote(sellToken, buyToken, trade.sellAmount, {
+      retries: config.kyber.quoteRetries,
+    });
     kyberOut = q.amountOut;
     kyberGasCost = weiToBuyToken(q.gasUnits * gasPriceWei, buyDecimals, buySymbol);
     kyberFee = bpsOfCeil(kyberOut, config.kyber.feeBps);
