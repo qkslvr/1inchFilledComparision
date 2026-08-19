@@ -324,8 +324,11 @@ export const config = {
      *  Two minutes still notices a recovery quickly enough. */
     reconnectMaxMs: 120_000,
     mode: profile.bebopMode ?? 'stream',
-    /** loopback only — the relay must never be reachable from outside the box */
-    relayPort: Number(process.env.BEBOP_RELAY_PORT ?? 8790),
+    /** Loopback only — the relay must never be reachable from outside the box.
+     *  8790 belongs to liqDashboard's next-server; this box also has the shadow
+     *  dashboard on 5432 and Postgres on 5433, so check `ss -ltn` before
+     *  assuming a port is free. */
+    relayPort: Number(process.env.BEBOP_RELAY_PORT ?? 8793),
     /** Well inside degradedAgeMs, so a book is never called stale merely for
      *  having taken the loopback hop. */
     relayPollMs: 500,

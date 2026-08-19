@@ -22,6 +22,7 @@ export class BebopRelayFeed implements BebopSource {
   private timer: NodeJS.Timeout | null = null;
   private inFlight = false;
   private wasConnected = false;
+  private lastErrorLogMs = 0;
 
   constructor(private readonly onStateEvent?: (kind: 'bebop_connected' | 'bebop_disconnected') => void) {}
 
@@ -89,8 +90,13 @@ export class BebopRelayFeed implements BebopSource {
         this.onStateEvent?.('bebop_disconnected');
       }
     } catch (err) {
-      if (this.state === 'connected' || this.state === 'connecting') {
-        logError('bebop relay poll failed', err);
+      // Log the first failure and then at most once a minute. Logging only on
+      // the transition meant a relay that was never reachable said so exactly
+      // once, at startup, and then went quiet for hours.
+      const now = Date.now();
+      if (now - this.lastErrorLogMs > 60_000) {
+        this.lastErrorLogMs = now;
+        logError(`bebop relay poll failed (127.0.0.1:${config.bebop.relayPort})`, err);
       }
       this.state = 'disconnected';
       if (this.wasConnected) {

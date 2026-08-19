@@ -55,7 +55,16 @@ const server = createServer((req, res) => {
 server.listen(config.bebop.relayPort, '127.0.0.1', () => {
   log(`bebop relay listening on 127.0.0.1:${config.bebop.relayPort} (${config.bebop.chainSlug})`);
 });
-server.on('error', (err) => logError('bebop relay server error', err));
+// A relay that cannot serve is worse than no relay: it holds the Bebop socket
+// while every consumer reads nothing and reports "no data". Exiting hands the
+// problem to the supervisor instead of hiding it. This is not hypothetical —
+// 8790 was already bound by next-server, and the relay ran headless for
+// fifteen minutes with a perfectly healthy stream nobody could reach.
+server.on('error', (err) => {
+  logError('bebop relay cannot listen, exiting', err);
+  feed.stop();
+  process.exit(1);
+});
 
 const status = setInterval(() => {
   log(
