@@ -332,6 +332,10 @@ export const config = {
     confirmations: 1,
     /** cap on blocks per getLogs call, so a long outage backfills gradually */
     maxBlockSpan: 200,
+    /** How often to read the public solver-competition feed. It advances about
+     *  once per block, so polling faster than a block only costs requests; this
+     *  is comfortably inside a block time without hammering it. */
+    competitionPollMs: 3_000,
   },
   pancake: {
     /** our assumed markup on a PancakeSwap-hedged fill, same basis as the others */

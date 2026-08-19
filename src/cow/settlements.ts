@@ -83,6 +83,18 @@ async function rpc<T>(method: string, params: unknown[]): Promise<T> {
   return body.result as T;
 }
 
+/** Timestamp of one block, in ms.
+ *
+ *  Shared with the competition feed, which needs the same thing for the block an
+ *  auction was decided on. */
+export async function blockTimestampMs(blockNumber: number): Promise<number> {
+  const block = await rpc<{ timestamp: string } | null>('eth_getBlockByNumber', [
+    '0x' + blockNumber.toString(16),
+    false,
+  ]);
+  return block ? Number(BigInt(block.timestamp)) * 1000 : Date.now();
+}
+
 /** Polls for newly settled trades.
  *
  *  Deliberately stays a few blocks behind the head: a log read at the tip can be

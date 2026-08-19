@@ -1,13 +1,23 @@
 /** cowswapResolver — did the winning CoW solver leave money on the table?
  *
- *  For every settled CoW trade, ask what KalqiX, Kyber and Bebop would have paid
- *  the same user for the same sell amount. A positive edge means a rival venue
- *  beat the price the solver actually delivered.
+ *  For every CoW trade, ask what KalqiX, Kyber and Bebop would have paid the same
+ *  user for the same sell amount. A positive edge means a rival venue beat the
+ *  price the solver actually delivered.
  *
- *  This is a price comparison and nothing more. CoW's open-order set is
- *  solver-only, so we never see an order in flight and cannot ask who would have
- *  been first. `t_actual_*` is left null so classify() reports no lead time
- *  rather than inventing one. See SPEC-cowswap-resolver.md.
+ *  Two feeds supply the same trades from different angles:
+ *
+ *    - CompetitionFeed reads the public solver-competition endpoint, which
+ *      names the winning solution at the block the auction was decided. This is
+ *      the primary source: quoting against that block removes the settlement lag
+ *      that used to contaminate the measurement.
+ *    - SettlementFeed reads `Trade` logs after the fact. Kept as a backstop, so
+ *      an auction missed during a restart or an API outage is still recorded.
+ *
+ *  Whichever arrives first wins; `orders.source` records which, so the two can
+ *  be reconciled. It remains a price comparison, not a race — CoW batches per
+ *  block, so there is no runway to be first on. `t_actual_*` stays null and
+ *  classify() therefore reports no lead time rather than inventing one.
+ *  See SPEC-cowswap-resolver.md.
  */
 import { config, pairForTokens } from '../../config.js';
 import { Db, type TickInsert } from '../db/db.js';
@@ -19,12 +29,13 @@ import { BebopFeed } from '../bebop/feed.js';
 import { walkBuyBaseFloat, walkSellBaseFloat } from '../bebop/depth.js';
 import { walkBuyBase, walkSellBase } from '../kalqix/book.js';
 import { SettlementFeed, type CowTrade } from './settlements.js';
+import { CompetitionFeed, type CowCompetition } from './competition.js';
 import { bpsOfCeil, ppmOfCeil, quoteForBaseCeil, rescale, toFloat } from '../pricing/units.js';
 import { buildDecidedOutcome, OUTCOME_ORDER_SQL, OUTCOME_TICK_SQL } from '../report/outcome.js';
 import { NATIVE_SENTINEL } from '../../config.js';
 import { log, logError } from '../log.js';
 
-const SDK_VERSION = 'cow-settlements-1';
+const SDK_VERSION = 'cow-competition-1';
 
 const db = await Db.open(config.chainId, { schemaOverride: config.schemaOverride });
 const runId = await db.startRun(
@@ -76,8 +87,32 @@ function weiToBuyToken(wei: bigint, buyDecimals: number, buySymbol: string): big
 
 let evaluated = 0;
 let skipped = 0;
+let fromAuction = 0;
+let fromChain = 0;
+/** Orders being priced right now. orderExists() is a database round trip, so
+ *  two feeds can both pass it for the same order before either has written a
+ *  row — the same duplicate-registration bug the Fusion collector already hit. */
+const registering = new Set<string>();
 
-async function evaluate(trade: CowTrade): Promise<void> {
+async function evaluate(
+  trade: CowTrade,
+  comp: CowCompetition | null,
+  source: 'auction' | 'chain'
+): Promise<void> {
+  if (registering.has(trade.orderUid)) return;
+  registering.add(trade.orderUid);
+  try {
+    await evaluateInner(trade, comp, source);
+  } finally {
+    registering.delete(trade.orderUid);
+  }
+}
+
+async function evaluateInner(
+  trade: CowTrade,
+  comp: CowCompetition | null,
+  source: 'auction' | 'chain'
+): Promise<void> {
   if (await db.orderExists(trade.orderUid)) return;
   const sellToken = wethFor(trade.sellToken);
   const buyToken = wethFor(trade.buyToken);
@@ -217,7 +252,7 @@ async function evaluate(trade: CowTrade): Promise<void> {
     orderHash: trade.orderUid,
     runId,
     receivedAtMs: trade.blockTsMs,
-    source: 'poll',
+    source,
     lateSeen: false,
     makerAsset: sellToken,
     takerAsset: buyToken,
@@ -245,6 +280,13 @@ async function evaluate(trade: CowTrade): Promise<void> {
     deadlineMs: null,
     extensionRaw: null,
     orderStructJson: null,
+    // The bar we would have had to clear. Only the competition feed knows it;
+    // a trade recovered from a log carries nulls here.
+    cowAuctionId: comp?.auctionId ?? null,
+    cowSolverCount: comp?.solverCount ?? null,
+    cowWinnerSolver: comp?.winnerSolver ?? null,
+    cowWinnerScore: comp?.winnerScore ?? null,
+    cowReferenceScore: comp?.referenceScore ?? null,
   });
   db.insertTick(tick);
   // Settled by definition. terminal_at_ms sits one ms after the tick so the tick
@@ -262,16 +304,30 @@ async function evaluate(trade: CowTrade): Promise<void> {
     db.upsertDecidedOutcome(buildDecidedOutcome(row, raw));
   }
   evaluated++;
+  if (source === 'auction') fromAuction++;
+  else fromChain++;
 }
 
-const feed = new SettlementFeed((t) => {
-  void evaluate(t).catch((err) => logError(`evaluate ${t.orderUid.slice(0, 12)} failed`, err));
+// Primary: the auction as it was decided.
+const competition = new CompetitionFeed((t, c) => {
+  void evaluate(t, c, 'auction').catch((err) =>
+    logError(`evaluate ${t.orderUid.slice(0, 12)} failed`, err)
+  );
 });
+// Backstop: anything the competition feed missed still shows up on chain.
+const feed = new SettlementFeed((t) => {
+  void evaluate(t, null, 'chain').catch((err) =>
+    logError(`evaluate ${t.orderUid.slice(0, 12)} failed`, err)
+  );
+});
+await competition.start();
 await feed.start();
 
 const status = setInterval(() => {
   log(
-    `status: trades=${feed.tradeCount} evaluated=${evaluated} unhedgeable=${skipped} ` +
+    `status: auctions=${competition.auctionCount} trades=${competition.tradeCount}/${feed.tradeCount} ` +
+      `evaluated=${evaluated} (auction=${fromAuction} chain=${fromChain}) unhedgeable=${skipped} ` +
+      (competition.lastError ? `compErr=${competition.lastError} ` : '') +
       `bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'} ` +
       `books=${[...samplers.values()].map((s) => `${s.ticker}=${s.sampleCount}`).join(' ')}` +
       (db.storagePressure ? ` STORAGE-PRESSURE(${db.droppedTicks} dropped)` : '')
@@ -283,6 +339,7 @@ process.on('SIGINT', () => {
   if (shuttingDown) process.exit(1);
   shuttingDown = true;
   log('SIGINT: shutting down...');
+  competition.stop();
   feed.stop();
   bebop.stop();
   for (const s of samplers.values()) s.stop();

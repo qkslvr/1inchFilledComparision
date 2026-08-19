@@ -74,7 +74,7 @@ export interface OrderInsert {
   orderHash: string;
   runId: number;
   receivedAtMs: number;
-  source: 'ws' | 'sweep' | 'poll';
+  source: 'ws' | 'sweep' | 'poll' | 'auction' | 'chain';
   lateSeen: boolean;
   makerAsset: string;
   takerAsset: string;
@@ -100,6 +100,12 @@ export interface OrderInsert {
   deadlineMs: number | null;
   extensionRaw: string | null;
   orderStructJson: string | null;
+  /** CoW solver competition context; null everywhere else. */
+  cowAuctionId?: number | null;
+  cowSolverCount?: number | null;
+  cowWinnerSolver?: string | null;
+  cowWinnerScore?: bigint | null;
+  cowReferenceScore?: bigint | null;
 }
 
 export interface TickInsert {
@@ -412,8 +418,9 @@ export class Db {
         maker_address, pair, direction, hedge_asset_kind, eligible, kyber_only, skip_reason, size_usd,
         auction_start_ms, auction_duration_s, initial_rate_bump, auction_points_json,
         gas_bump_estimate, gas_price_estimate, allow_partial_fills, allow_multiple_fills,
-        deadline_ms, extension_raw, order_struct_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        deadline_ms, extension_raw, order_struct_json,
+        cow_auction_id, cow_solver_count, cow_winner_solver, cow_winner_score, cow_reference_score
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (order_hash) DO NOTHING
       RETURNING 1 AS inserted`,
       [
@@ -446,6 +453,11 @@ export class Db {
         o.deadlineMs,
         o.extensionRaw,
         o.orderStructJson,
+        o.cowAuctionId ?? null,
+        o.cowSolverCount ?? null,
+        o.cowWinnerSolver?.toLowerCase() ?? null,
+        s(o.cowWinnerScore ?? null),
+        s(o.cowReferenceScore ?? null),
       ]
     );
     return rows.length > 0;

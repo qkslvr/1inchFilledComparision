@@ -36,6 +36,19 @@ export const MIGRATIONS: string[] = [
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS t_shadow_pancake_ms BIGINT`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS t_shadow_pancake_edge TEXT`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS max_edge_pancake TEXT`,
+  // The CoW dataset gained a live order source (the public solver-competition
+  // feed) alongside the settlement-log one. 'auction' means we saw the auction
+  // as it was decided; 'chain' means we found it afterwards in a Trade log.
+  // Recording which lets the two be reconciled against each other.
+  `ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_source_check`,
+  `ALTER TABLE orders ADD CONSTRAINT orders_source_check CHECK (source IN ('ws','sweep','poll','auction','chain'))`,
+  // What we would have had to beat. Scores are wei of native token, stored as
+  // TEXT for the same reason every other bigint here is.
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS cow_auction_id BIGINT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS cow_solver_count INTEGER`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS cow_winner_solver TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS cow_winner_score TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS cow_reference_score TEXT`,
 ];
 
 export const SCHEMA = `
@@ -54,7 +67,7 @@ CREATE TABLE IF NOT EXISTS orders (
   order_hash        TEXT PRIMARY KEY,
   first_seen_run_id BIGINT NOT NULL REFERENCES runs(id),
   received_at_ms    BIGINT NOT NULL,
-  source            TEXT NOT NULL CHECK (source IN ('ws','sweep','poll')),
+  source            TEXT NOT NULL CHECK (source IN ('ws','sweep','poll','auction','chain')),
   late_seen         SMALLINT NOT NULL DEFAULT 0,
   maker_asset       TEXT NOT NULL,
   taker_asset       TEXT NOT NULL,
@@ -105,7 +118,13 @@ CREATE TABLE IF NOT EXISTS orders (
   t_actual_chain_ms BIGINT,
   filled_maker_total TEXT,
   filled_taker_total TEXT,
-  status_json       TEXT
+  status_json       TEXT,
+  -- CoW solver competition, null for the Fusion datasets
+  cow_auction_id      BIGINT,
+  cow_solver_count    INTEGER,
+  cow_winner_solver   TEXT,
+  cow_winner_score    TEXT,
+  cow_reference_score TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_orders_open ON orders(deadline_ms) WHERE terminal_status IS NULL;
 CREATE INDEX IF NOT EXISTS idx_orders_pair ON orders(pair);
