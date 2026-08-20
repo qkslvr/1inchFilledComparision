@@ -377,10 +377,15 @@ export const config = {
      *  The log path was winning nearly every race, which is backwards: it quotes
      *  ~15s after the block where the competition feed quotes ~3s after it, so
      *  the faster, score-carrying path was being crowded out by its own backup.
-     *  /latest advances every ~13s, so this is two chances to get there first.
-     *  A trade the fast path genuinely missed is only delayed, never dropped —
-     *  and by then its competition is more likely published for by_tx_hash. */
-    backstopGraceMs: 28_000,
+     *  /latest advances every ~13s, so this is one full chance to get there
+     *  first. A trade the fast path genuinely missed is delayed, never dropped.
+     *
+     *  This MUST stay below quoteLagToleranceMs (25s). At 28s it pushed the
+     *  backstop's own ticks past the staleness threshold and flagged 28 of 32
+     *  degraded — a delay we chose to add, then marked the data down for. The
+     *  fast path only won ~10% more rows for it, and now that by_tx_hash gives
+     *  the backstop its scores anyway, lag is the only thing left to protect. */
+    backstopGraceMs: 15_000,
   },
   pancake: {
     /** our assumed markup on a PancakeSwap-hedged fill, same basis as the others */
