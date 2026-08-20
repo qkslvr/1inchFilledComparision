@@ -37,14 +37,6 @@ if ! pgrep -f "tsx src/bebop/rela[y].ts" > /dev/null 2>&1; then
   sleep 3
 fi
 
-# cowswapResolver runs a different entrypoint: its orders come from chain logs,
-# not the 1inch feed, so it is not a run-collector.sh chain.
-if ! pgrep -f "tsx src/cow/resolve[r].ts" > /dev/null 2>&1; then
-  echo "$(date -Is) ensure: cowswapResolver not running, starting" >> logs/ensure.log
-  setsid nohup env CHAIN=cowswapResolver npx tsx src/cow/resolver.ts >> logs/collect-cow.log 2>&1 < /dev/null &
-  sleep 2
-fi
-
 # The solver simulation: bids on open CoW orders before the winner is known,
 # then re-quotes afterwards to see whether the price would have held. Separate
 # entrypoint and separate schema from the shadow resolver.

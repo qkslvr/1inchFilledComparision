@@ -539,7 +539,14 @@ export interface ResolvedChain {
   venues: Array<'kalqix' | 'kyber' | 'bebop' | 'pancake'>;
 }
 
-export const allChains: ResolvedChain[] = ['ethereum', 'bsc', 'cowswapResolver', 'cowswapSolver'].map((key) => {
+/** What the dashboard serves.
+ *
+ *  Narrowed to the solver simulation on 2026-08-20. The Fusion collectors were
+ *  stopped the same day, and cowswapResolver answered a weaker question — would
+ *  some venue have paid more, after the fact — that the solver subsumes by
+ *  asking whether we would actually have won. Their profiles and their data are
+ *  kept; add a key back here to serve one again. */
+export const allChains: ResolvedChain[] = ['cowswapSolver'].map((key) => {
   const p = profiles[key]!;
   return {
     key,
