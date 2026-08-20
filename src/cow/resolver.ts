@@ -328,6 +328,12 @@ async function evaluateInner(
   // falls inside classify()'s decision horizon; t_actual stays null so no lead
   // time is reported.
   db.setTerminal(trade.orderUid, 'filled', null, trade.sellAmount, trade.buyAmount);
+  // Keep the settlement tx. It was never stored, so `fills` sat empty and the
+  // competition could not be looked up again for a row that missed it first time.
+  if (trade.txHash) {
+    db.upsertFill(trade.orderUid, trade.txHash, trade.sellAmount.toString(), trade.buyAmount.toString(), null);
+    db.setFillBlock(trade.orderUid, trade.txHash, trade.blockNumber, trade.blockTsMs);
+  }
   await db.all(`UPDATE orders SET terminal_at_ms = ? WHERE order_hash = ?`, [
     trade.blockTsMs + 1,
     trade.orderUid,
@@ -350,10 +356,18 @@ const competition = new CompetitionFeed((t, c) => {
   );
 });
 // Backstop: anything the competition feed missed still shows up on chain.
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 const feed = new SettlementFeed((t) => {
   void (async () => {
+    // Give the competition feed first refusal. It quotes ~3s after the block
+    // and carries the solver scores; this path quotes ~15s after it and, until
+    // the lookup below, carried none. Racing it was actively harmful.
+    const wait = config.cow.backstopGraceMs - (Date.now() - t.blockTsMs);
+    if (wait > 0) await sleep(wait);
+    if (await db.orderExists(t.orderUid)) return; // the fast path got there
     // Recover the solver scores for auctions the live feed skipped. Without
-    // this the backstop's rows — most of them — carry no competition at all.
+    // this the backstop's rows carry no competition at all.
     const comp = t.txHash ? await fetchCompetitionByTx(t.txHash) : null;
     await evaluate(t, comp, 'chain');
   })().catch((err) => logError(`evaluate ${t.orderUid.slice(0, 12)} failed`, err));

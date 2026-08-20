@@ -371,6 +371,16 @@ export const config = {
     competitionPollMs: 6_000,
     /** How long to stop polling after a 429, rather than retrying into it. */
     rateLimitBackoffMs: 30_000,
+    /** How long the settlement backstop waits before claiming a trade.
+     *
+     *  Both feeds see the same trades, and whichever registers it first wins.
+     *  The log path was winning nearly every race, which is backwards: it quotes
+     *  ~15s after the block where the competition feed quotes ~3s after it, so
+     *  the faster, score-carrying path was being crowded out by its own backup.
+     *  /latest advances every ~13s, so this is two chances to get there first.
+     *  A trade the fast path genuinely missed is only delayed, never dropped —
+     *  and by then its competition is more likely published for by_tx_hash. */
+    backstopGraceMs: 28_000,
   },
   pancake: {
     /** our assumed markup on a PancakeSwap-hedged fill, same basis as the others */
