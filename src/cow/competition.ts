@@ -67,6 +67,52 @@ interface RawCompetition {
   auctionDeadlineBlock?: number;
   transactionHashes?: string[];
   solutions?: RawSolution[];
+  auction?: { orders?: string[]; prices?: Record<string, string> };
+}
+
+/** Everything one auction tells us, including the parts the shadow dataset
+ *  ignores: the open-order set and the native price vector.
+ *
+ *  `orders` is the solvable set — every order a solver could have included,
+ *  most of which did not settle in this auction. That is the open-order feed
+ *  the solver simulation bids into.
+ *
+ *  `prices` values a token atom in native wei, scaled by 1e18: a surplus is
+ *  worth `amount * price / 1e18`. It is what makes our own score commensurable
+ *  with the winner's rather than a proxy for it. */
+export interface CowAuctionSnapshot {
+  competition: CowCompetition;
+  /** uids solvable in this auction */
+  orderUids: string[];
+  /** lowercased token address -> native price, 1e18-scaled */
+  prices: Map<string, bigint>;
+  /** the orders the winner actually settled, with executed amounts */
+  settled: Array<{ uid: string; sellAmount: bigint; buyAmount: bigint; buyToken: string; sellToken: string }>;
+}
+
+export function parseAuctionSnapshot(raw: RawCompetition): CowAuctionSnapshot | null {
+  const parsed = tradesFromCompetition(raw);
+  if (!parsed) return null;
+  const prices = new Map<string, bigint>();
+  for (const [token, px] of Object.entries(raw.auction?.prices ?? {})) {
+    try {
+      prices.set(token.toLowerCase(), BigInt(px));
+    } catch {
+      // a price we cannot parse is simply a token we cannot score
+    }
+  }
+  return {
+    competition: parsed.competition,
+    orderUids: raw.auction?.orders ?? [],
+    prices,
+    settled: parsed.trades.map((t) => ({
+      uid: t.orderUid,
+      sellAmount: t.sellAmount,
+      buyAmount: t.buyAmount,
+      buyToken: t.buyToken,
+      sellToken: t.sellToken,
+    })),
+  };
 }
 
 /** A CoW order uid is 56 bytes: a 32-byte order digest, then the 20-byte owner,

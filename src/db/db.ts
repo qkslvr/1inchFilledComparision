@@ -106,6 +106,11 @@ export interface OrderInsert {
   cowWinnerSolver?: string | null;
   cowWinnerScore?: bigint | null;
   cowReferenceScore?: bigint | null;
+  /** The order as the user signed it; solver simulation only. */
+  limitSellAmount?: bigint | null;
+  limitBuyAmount?: bigint | null;
+  validToMs?: number | null;
+  partiallyFillable?: boolean | null;
 }
 
 export interface TickInsert {
@@ -419,8 +424,9 @@ export class Db {
         auction_start_ms, auction_duration_s, initial_rate_bump, auction_points_json,
         gas_bump_estimate, gas_price_estimate, allow_partial_fills, allow_multiple_fills,
         deadline_ms, extension_raw, order_struct_json,
-        cow_auction_id, cow_solver_count, cow_winner_solver, cow_winner_score, cow_reference_score
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        cow_auction_id, cow_solver_count, cow_winner_solver, cow_winner_score, cow_reference_score,
+        limit_sell_amount, limit_buy_amount, valid_to_ms, partially_fillable
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (order_hash) DO NOTHING
       RETURNING 1 AS inserted`,
       [
@@ -458,6 +464,10 @@ export class Db {
         o.cowWinnerSolver?.toLowerCase() ?? null,
         s(o.cowWinnerScore ?? null),
         s(o.cowReferenceScore ?? null),
+        s(o.limitSellAmount ?? null),
+        s(o.limitBuyAmount ?? null),
+        o.validToMs ?? null,
+        o.partiallyFillable === null || o.partiallyFillable === undefined ? null : o.partiallyFillable ? 1 : 0,
       ]
     );
     return rows.length > 0;
@@ -670,6 +680,45 @@ export class Db {
         t.pancakeTier,
         s(t.edgePancake),
       ]
+    );
+  }
+
+  // --- solver simulation ---
+
+  /** The bid we would have submitted, formed strictly before the auction
+   *  resolved. Overwritten on each quote round until resolution freezes it. */
+  recordBid(orderHash: string, score: bigint, venue: string, bidOut: bigint, bidAtMs: number): void {
+    this.enqueue(
+      `UPDATE orders SET our_score = ?, our_best_venue = ?, our_bid_out = ?, bid_at_ms = ?
+       WHERE order_hash = ? AND resolved_at_ms IS NULL`,
+      [s(score), venue, s(bidOut), bidAtMs, orderHash]
+    );
+  }
+
+  /** The outcome. `resolved_at_ms` also closes the order to further bidding:
+   *  recordBid ignores rows that already have it, so a quote that lands after
+   *  the winner is known can never become the bid we claim to have made. */
+  recordResolution(orderHash: string, resolvedAtMs: number, won: boolean, marginBps: number | null): void {
+    this.enqueue(
+      `UPDATE orders SET resolved_at_ms = ?, won = ?, score_margin_bps = ? WHERE order_hash = ?`,
+      [resolvedAtMs, won ? 1 : 0, marginBps, orderHash]
+    );
+  }
+
+  insertQuoteHold(
+    orderHash: string,
+    venue: string,
+    delayMs: number,
+    checkedAtMs: number,
+    bidOut: bigint | null,
+    requoteOut: bigint | null,
+    held: boolean | null,
+    slippageBps: number | null
+  ): void {
+    this.enqueue(
+      `INSERT INTO quote_holds (order_hash, venue, delay_ms, checked_at_ms, bid_out, requote_out, held, slippage_bps)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (order_hash, venue, delay_ms) DO NOTHING`,
+      [orderHash, venue, delayMs, checkedAtMs, s(bidOut), s(requoteOut), held === null ? null : held ? 1 : 0, slippageBps]
     );
   }
 

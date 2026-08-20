@@ -145,6 +145,16 @@ export const PAGE = `<!doctype html>
   </div>
   <div class="lnote">Every margin is net of the auction price, gas on each transaction we would send, venue fees, our 3 bps markup, and a 10 bps safety buffer. bps = basis points; 100 bps = 1%.</div>
 </dialog>
+<style>
+.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
+.controls input,.controls select{background:#141824;color:#E6E9F2;border:1px solid #262C3D;border-radius:6px;padding:6px 8px;font:inherit;font-size:13px}
+.controls input{min-width:190px}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:#8B9CF0}
+.rowk{display:flex;justify-content:space-between;font-size:12px;color:#9AA3B8;margin-top:4px}
+.rowk b{color:#E6E9F2}
+.rowk.eff{border-top:1px solid #262C3D;margin-top:8px;padding-top:6px}
+</style>
 <script>
 const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const chip = c => c ? '<span class="chip ' + c.kind + '">' + esc(c.text) + '</span>' : '';
@@ -175,10 +185,138 @@ function table(headers, rows) {
 }
 const row = cells => '<tr>' + cells.map(c => '<td class="' + (c && c.num ? 'num' : '') + '">' + (c && c.h !== undefined ? c.h : esc(c)) + '</td>').join('') + '</tr>';
 
+function pct(v) { return v === null || v === undefined ? '—' : v.toFixed(0) + '%'; }
+function bps(v) { return v === null || v === undefined ? '—' : (v > 0 ? '+' : '') + v.toFixed(1) + ' bps'; }
+
+function solverCard(v) {
+  var cls = v.winRatePct === null ? 'mut' : v.winRatePct >= 50 ? 'win' : '';
+  return '<div class="card">'
+    + '<h3>' + esc(v.name) + '</h3>'
+    + '<div class="big ' + cls + '">' + pct(v.winRatePct) + '</div>'
+    + '<div class="sub">would have won ' + v.wins + ' of ' + v.bids + ' bids</div>'
+    + '<div class="rowk"><span>quote held</span><b>' + pct(v.heldPct) + '</b></div>'
+    + '<div class="rowk"><span>median margin</span><b>' + bps(v.medianMarginBps) + '</b></div>'
+    + '<div class="rowk"><span>median slippage</span><b>' + bps(v.medianSlippageBps) + '</b></div>'
+    // Winning an auction you cannot honour is not a win, so the two rates are
+    // shown multiplied as well as separately.
+    + '<div class="rowk eff"><span>effective</span><b>'
+    + (v.winRatePct === null || v.heldPct === null ? '—' : (v.winRatePct * v.heldPct / 100).toFixed(0) + '%')
+    + '</b></div>'
+    + '</div>';
+}
+
+function solverSection(c) {
+  var s = c.solver;
+  var h = '<div class="eyebrow">If we had bid as a solver, sourcing from…</div>';
+  h += '<div class="cards">' + s.venues.map(solverCard).join('') + '</div>';
+  h += '<div class="funnel">'
+    + '<div class="stat"><b>' + s.coverage.tracked + '</b><span>orders tracked</span></div><span class="arrow">&rsaquo;</span>'
+    + '<div class="stat"><b>' + s.coverage.bid + '</b><span>bid on</span></div><span class="arrow">&rsaquo;</span>'
+    + '<div class="stat"><b>' + s.coverage.resolved + '</b><span>auctions resolved</span></div>'
+    + '</div>';
+
+  h += '<h4>Bids — quoted before the winner was known, then re-quoted after</h4>';
+  h += '<div class="controls">'
+    + '<input id="fq" placeholder="filter: pair, venue…" oninput="applyFilters()">'
+    + '<select id="fv" onchange="applyFilters()"><option value="">all venues</option>'
+    + '<option value="kalqix">KalqiX</option><option value="kyber">Kyber</option><option value="bebop">Bebop</option></select>'
+    + '<select id="fr" onchange="applyFilters()"><option value="">won and lost</option>'
+    + '<option value="won">won only</option><option value="lost">lost only</option></select>'
+    + '<select id="fh" onchange="applyFilters()"><option value="">any hold result</option>'
+    + '<option value="held">quote held</option><option value="slipped">quote slipped</option></select>'
+    + '<span class="mut" id="fcount"></span></div>';
+
+  var headers = ['ended', 'pair', '$size USD', 'venue', 'result', '$margin', '$slippage', 'held', '$quotes', '$lead s', '$solvers'];
+  h += '<table id="solvertbl"><thead><tr>' + headers.map(function (t, i) {
+    var num = t.charAt(0) === '$';
+    return '<th class="sortable' + (num ? ' num' : '') + '" onclick="sortSolver(' + i + ')">' + esc(t.replace('$', '')) + '<span class="ind"></span></th>';
+  }).join('') + '</tr></thead><tbody>' + s.rows.map(solverRow).join('') + '</tbody></table>';
+  return h;
+}
+
+function solverRow(o) {
+  var res = o.won
+    ? '<span class="chip win">would have won</span>'
+    : '<span class="chip">outbid</span>';
+  var held = o.held === null ? '<span class="mut">—</span>'
+    : o.held ? '<span class="chip win">held</span>' : '<span class="chip short">slipped</span>';
+  return '<tr'
+    + ' data-venue="' + esc(o.venue || '') + '"'
+    + ' data-won="' + (o.won ? 'won' : 'lost') + '"'
+    + ' data-held="' + (o.held === null ? '' : o.held ? 'held' : 'slipped') + '"'
+    + ' data-text="' + esc(((o.pair || '') + ' ' + (o.venue || '')).toLowerCase()) + '">'
+    + '<td>' + esc(o.time) + '</td>'
+    + '<td>' + esc(o.pair || '') + '</td>'
+    + '<td class="num" data-v="' + (o.sizeUsd === null ? -1 : o.sizeUsd) + '">' + esc(usd(o.sizeUsd)) + '</td>'
+    + '<td>' + esc(o.venue || '') + '</td>'
+    + '<td>' + res + '</td>'
+    + '<td class="num" data-v="' + (o.marginBps === null ? -1e9 : o.marginBps) + '">' + bps(o.marginBps) + '</td>'
+    + '<td class="num" data-v="' + (o.slippageBps === null ? -1e9 : o.slippageBps) + '">' + bps(o.slippageBps) + '</td>'
+    + '<td>' + held + '</td>'
+    + '<td class="num" data-v="' + o.quoteRounds + '">' + o.quoteRounds + '</td>'
+    + '<td class="num" data-v="' + (o.bidLeadMs === null ? -1 : o.bidLeadMs) + '">' + (o.bidLeadMs === null ? '—' : (o.bidLeadMs / 1000).toFixed(0)) + '</td>'
+    + '<td class="num" data-v="' + (o.solverCount === null ? -1 : o.solverCount) + '">' + (o.solverCount === null ? '—' : o.solverCount) + '</td>'
+    + '</tr>';
+}
+
+var sortState = { col: -1, dir: -1 };
+function sortSolver(col) {
+  var tbl = document.getElementById('solvertbl');
+  if (!tbl) return;
+  sortState.dir = sortState.col === col ? -sortState.dir : -1;
+  sortState.col = col;
+  var body = tbl.tBodies[0];
+  var rows = [].slice.call(body.rows);
+  rows.sort(function (a, b) {
+    var x = a.cells[col], y = b.cells[col];
+    // Numeric columns carry data-v so that "—" and "+12.3 bps" still order
+    // sensibly instead of sorting as text.
+    var xv = x.hasAttribute('data-v') ? parseFloat(x.getAttribute('data-v')) : x.textContent.trim();
+    var yv = y.hasAttribute('data-v') ? parseFloat(y.getAttribute('data-v')) : y.textContent.trim();
+    if (xv < yv) return sortState.dir;
+    if (xv > yv) return -sortState.dir;
+    return 0;
+  });
+  rows.forEach(function (r) { body.appendChild(r); });
+  var ths = tbl.tHead.rows[0].cells;
+  for (var i = 0; i < ths.length; i++) {
+    var ind = ths[i].querySelector('.ind');
+    if (ind) ind.textContent = i === col ? (sortState.dir === -1 ? ' \u25be' : ' \u25b4') : '';
+  }
+}
+
+function applyFilters() {
+  var q = (document.getElementById('fq') || {}).value || '';
+  var v = (document.getElementById('fv') || {}).value || '';
+  var r = (document.getElementById('fr') || {}).value || '';
+  var hd = (document.getElementById('fh') || {}).value || '';
+  var tbl = document.getElementById('solvertbl');
+  if (!tbl) return;
+  var rows = tbl.tBodies[0].rows, shown = 0;
+  q = q.toLowerCase();
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var ok = (!q || row.getAttribute('data-text').indexOf(q) >= 0)
+      && (!v || row.getAttribute('data-venue') === v)
+      && (!r || row.getAttribute('data-won') === r)
+      && (!hd || row.getAttribute('data-held') === hd);
+    row.style.display = ok ? '' : 'none';
+    if (ok) shown++;
+  }
+  var c = document.getElementById('fcount');
+  if (c) c.textContent = shown + ' of ' + rows.length + ' shown';
+}
+
 function chainSection(c, active) {
   let h = '<section class="chain' + (active ? ' active' : '') + '" data-chain="' + esc(c.key) + '">';
   h += '<div class="chainmeta">' + c.observedHours.toFixed(1) + ' hours observed · '
     + c.ordersSeen.toLocaleString('en-US') + ' auctions seen · chain ' + c.chainId + '</div>';
+
+  if (c.orderSource === 'cow-solver' && c.solver) {
+    h += solverSection(c);
+    h += '</section>';
+    return h;
+  }
 
   h += '<div class="eyebrow">If we had been a resolver, hedging on…</div>';
   h += '<div class="cards">' + c.venues.map(card).join('') + '</div>';
@@ -246,6 +384,11 @@ const SUBTITLES = {
     + 'that user more than the winning solver did? CoW opens its order book only to its own solvers, so this '
     + 'compares prices after settlement — there is no lead time and no race. A measurement only. Nothing is '
     + 'signed or traded.',
+  'cow-solver': 'Simulating what it would take to be a CoW Swap solver. While an order is still open and the '
+    + 'winner is unknown, every venue is quoted and the best becomes our bid. When the auction resolves we compare '
+    + 'our score with the winning solver\'s — then quote the venues again, to see whether the price we bid on was '
+    + 'still there once we knew we had to honour it. We never submit a solution, so every win here is '
+    + 'counterfactual: our presence would have changed what rivals bid.',
 };
 
 let lastChains = [];
@@ -254,6 +397,7 @@ function setSubtitle() {
   const active = lastChains.find(c => c.key === activeChain) ?? lastChains[0];
   const el = document.getElementById('sub');
   if (el) el.textContent = SUBTITLES[active && active.orderSource ? active.orderSource : 'fusion'] || SUBTITLES.fusion;
+  if (active && active.orderSource === 'cow-solver') applyFilters();
 }
 
 async function refresh() {

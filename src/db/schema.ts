@@ -49,6 +49,34 @@ export const MIGRATIONS: string[] = [
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS cow_winner_solver TEXT`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS cow_winner_score TEXT`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS cow_reference_score TEXT`,
+  // --- solver simulation ---
+  // The order as the user signed it. The competition feed reports what the
+  // winner executed, not the limit that had to be beaten, so this comes from
+  // /api/v1/orders/{uid} and is what our surplus is measured against.
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS limit_sell_amount TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS limit_buy_amount TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS valid_to_ms BIGINT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS partially_fillable SMALLINT`,
+  // Our bid, formed strictly before the auction resolved.
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS our_score TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS our_best_venue TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS our_bid_out TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS bid_at_ms BIGINT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS resolved_at_ms BIGINT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS won SMALLINT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS score_margin_bps DOUBLE PRECISION`,
+  `CREATE TABLE IF NOT EXISTS quote_holds (
+     order_hash    TEXT NOT NULL REFERENCES orders(order_hash),
+     venue         TEXT NOT NULL,
+     delay_ms      INTEGER NOT NULL,
+     checked_at_ms BIGINT NOT NULL,
+     bid_out       TEXT,
+     requote_out   TEXT,
+     held          SMALLINT,
+     slippage_bps  DOUBLE PRECISION,
+     PRIMARY KEY (order_hash, venue, delay_ms)
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_holds_checked ON quote_holds(checked_at_ms DESC)`,
 ];
 
 export const SCHEMA = `
@@ -124,7 +152,31 @@ CREATE TABLE IF NOT EXISTS orders (
   cow_solver_count    INTEGER,
   cow_winner_solver   TEXT,
   cow_winner_score    TEXT,
-  cow_reference_score TEXT
+  cow_reference_score TEXT,
+  -- solver simulation; null for every other dataset
+  limit_sell_amount  TEXT,
+  limit_buy_amount   TEXT,
+  valid_to_ms        BIGINT,
+  partially_fillable SMALLINT,
+  our_score          TEXT,
+  our_best_venue     TEXT,
+  our_bid_out        TEXT,
+  bid_at_ms          BIGINT,
+  resolved_at_ms     BIGINT,
+  won                SMALLINT,
+  score_margin_bps   DOUBLE PRECISION
+);
+
+CREATE TABLE IF NOT EXISTS quote_holds (
+  order_hash    TEXT NOT NULL REFERENCES orders(order_hash),
+  venue         TEXT NOT NULL,
+  delay_ms      INTEGER NOT NULL,
+  checked_at_ms BIGINT NOT NULL,
+  bid_out       TEXT,
+  requote_out   TEXT,
+  held          SMALLINT,
+  slippage_bps  DOUBLE PRECISION,
+  PRIMARY KEY (order_hash, venue, delay_ms)
 );
 CREATE INDEX IF NOT EXISTS idx_orders_open ON orders(deadline_ms) WHERE terminal_status IS NULL;
 CREATE INDEX IF NOT EXISTS idx_orders_pair ON orders(pair);

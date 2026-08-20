@@ -45,6 +45,15 @@ if ! pgrep -f "tsx src/cow/resolve[r].ts" > /dev/null 2>&1; then
   sleep 2
 fi
 
+# The solver simulation: bids on open CoW orders before the winner is known,
+# then re-quotes afterwards to see whether the price would have held. Separate
+# entrypoint and separate schema from the shadow resolver.
+if ! pgrep -f "tsx src/cow/solve[r].ts" > /dev/null 2>&1; then
+  echo "$(date -Is) ensure: cowswapSolver not running, starting" >> logs/ensure.log
+  setsid nohup env CHAIN=cowswapSolver npx tsx src/cow/solver.ts >> logs/collect-solver.log 2>&1 < /dev/null &
+  sleep 2
+fi
+
 # Fusion collectors, off since 2026-08-20. The project now only follows CoW Swap
 # on Ethereum, and the two 1inch collectors were the entire 1inch spend plus
 # ~10 req/s of KyberSwap traffic against a 3 req/s budget — which is why Kyber

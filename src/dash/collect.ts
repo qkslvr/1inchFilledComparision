@@ -294,9 +294,15 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
     detail: e.detail_json ? String(e.detail_json).slice(0, 90) : '',
   }));
 
+  // The solver dataset answers different questions, so it carries its own
+  // block rather than bending the shadow shapes: a win rate is not a win count,
+  // and a quote-hold rate has no analogue at all in the other tabs.
+  const solver = chain.orderSource === 'cow-solver' ? await collectSolver(db) : null;
+
   return {
     key: chain.key,
     label: chain.label,
+    solver,
     orderSource: chain.orderSource,
     chainId: chain.chainId,
     observedHours: activeMs / 3_600_000,
@@ -386,6 +392,89 @@ async function dbFor(chain: { chainId: number; schemaOverride?: string | null })
     pools.set(key, db);
   }
   return db;
+}
+
+/** Per-venue win and quote-hold rates, plus the decided bids behind them.
+ *
+ *  Win rate is over auctions we actually bid on — an order we never quoted is
+ *  not a loss, and counting it as one would understate every venue. */
+async function collectSolver(db: Db) {
+  const [venueRows, holdRows, rows, coverage] = await Promise.all([
+    db.all(`SELECT our_best_venue AS venue, count(*) AS bids,
+                   sum(won) AS wins,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY score_margin_bps) AS median_margin_bps
+            FROM orders WHERE resolved_at_ms IS NOT NULL AND our_best_venue IS NOT NULL
+            GROUP BY 1`),
+    db.all(`SELECT venue, delay_ms, count(*) AS checks, sum(held) AS held,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY slippage_bps) AS median_slippage_bps
+            FROM quote_holds GROUP BY 1, 2`),
+    db.all(`SELECT o.order_hash, o.pair, o.resolved_at_ms, o.won, o.score_margin_bps,
+                   o.our_best_venue, o.our_score, o.cow_winner_score, o.cow_reference_score,
+                   o.cow_solver_count, o.size_usd, o.bid_at_ms,
+                   (SELECT count(*) FROM ticks t WHERE t.order_hash = o.order_hash) AS quote_rounds,
+                   (SELECT bool_and(h.held = 1) FROM quote_holds h WHERE h.order_hash = o.order_hash) AS all_held,
+                   (SELECT max(h.slippage_bps) FROM quote_holds h WHERE h.order_hash = o.order_hash) AS worst_slippage_bps
+            FROM orders o WHERE o.resolved_at_ms IS NOT NULL
+            ORDER BY o.resolved_at_ms DESC LIMIT 400`),
+    db.get(`SELECT count(*) AS tracked,
+                   count(*) FILTER (WHERE resolved_at_ms IS NOT NULL) AS resolved,
+                   count(*) FILTER (WHERE our_score IS NOT NULL) AS bid
+            FROM orders`),
+  ]);
+
+  const holdsByVenue = new Map<string, { checks: number; held: number; slip: number | null }>();
+  for (const h of holdRows) {
+    const cur = holdsByVenue.get(h.venue) ?? { checks: 0, held: 0, slip: null };
+    cur.checks += Number(h.checks);
+    cur.held += Number(h.held ?? 0);
+    if (h.median_slippage_bps !== null) cur.slip = Number(h.median_slippage_bps);
+    holdsByVenue.set(h.venue, cur);
+  }
+
+  const venues = ['kalqix', 'kyber', 'bebop'].map((venue) => {
+    const v = venueRows.find((r) => r.venue === venue);
+    const h = holdsByVenue.get(venue);
+    const bids = Number(v?.bids ?? 0);
+    const wins = Number(v?.wins ?? 0);
+    return {
+      venue,
+      name: venue === 'kalqix' ? 'KalqiX' : venue === 'kyber' ? 'Kyber' : 'Bebop',
+      bids,
+      wins,
+      // Null rather than 0% when nothing has been bid: an untested venue and a
+      // venue that never wins must not look the same.
+      winRatePct: bids > 0 ? (100 * wins) / bids : null,
+      holdChecks: h?.checks ?? 0,
+      heldPct: h && h.checks > 0 ? (100 * h.held) / h.checks : null,
+      medianMarginBps: v?.median_margin_bps === null || v?.median_margin_bps === undefined ? null : Number(v.median_margin_bps),
+      medianSlippageBps: h?.slip ?? null,
+    };
+  });
+
+  return {
+    venues,
+    coverage: {
+      tracked: Number(coverage?.tracked ?? 0),
+      resolved: Number(coverage?.resolved ?? 0),
+      bid: Number(coverage?.bid ?? 0),
+    },
+    rows: rows.map((r) => ({
+      time: new Date(Number(r.resolved_at_ms)).toISOString().slice(11, 19),
+      tsMs: Number(r.resolved_at_ms),
+      pair: r.pair,
+      sizeUsd: r.size_usd === null ? null : Number(r.size_usd),
+      venue: r.our_best_venue,
+      won: r.won === 1,
+      marginBps: r.score_margin_bps === null ? null : Number(r.score_margin_bps),
+      solverCount: r.cow_solver_count === null ? null : Number(r.cow_solver_count),
+      quoteRounds: Number(r.quote_rounds ?? 0),
+      // null when we lost: there was nothing to honour, so "did it hold" is not
+      // a question that was asked.
+      held: r.all_held === null ? null : r.all_held === true,
+      slippageBps: r.worst_slippage_bps === null ? null : Number(r.worst_slippage_bps),
+      bidLeadMs: r.bid_at_ms === null ? null : Number(r.resolved_at_ms) - Number(r.bid_at_ms),
+    })),
+  };
 }
 
 export async function collectAll(datasetKey?: string): Promise<Record<string, unknown>> {

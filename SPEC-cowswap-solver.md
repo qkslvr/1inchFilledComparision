@@ -149,6 +149,33 @@ an order's open life we had a live bid standing for. That is a measure of our
 implementation quality, and improvable, rather than a property of CoW we are
 stuck with.
 
+## The invariant that makes this honest
+
+Everything below hangs on one ordering, and any implementation that breaks it is
+measuring something else:
+
+```
+   t0   order is open, winner NOT yet known
+        └─ quote all venues  ─────────────────►  THE BID
+                                                  (what we would have committed to)
+   t1   auction resolves, winner published
+        └─ compare our score to the winner's ──►  WON / LOST
+   t2   immediately after
+        └─ quote all venues AGAIN ────────────►  DID IT HOLD?
+                                                  (could we actually have filled it)
+```
+
+The bid at `t0` must never be recomputed from a quote taken at or after `t1`.
+A quote fetched once the winner is known is contaminated: it has seen the same
+information the winner acted on. Storing the bid tick and the hold tick as
+separate rows, each with its own timestamp, is what keeps them from being
+conflated — a single mutable "latest quote" field would silently become the
+post-outcome price.
+
+`bid_at_ms < resolved_at_ms < hold_checked_at_ms` is asserted at write time,
+and a bid whose quote arrived after the auction resolved is discarded rather
+than scored.
+
 ## The simulation loop
 
 ### Phase A — discover open orders

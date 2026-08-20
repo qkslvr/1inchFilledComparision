@@ -43,7 +43,7 @@ interface ChainProfile {
   schemaOverride?: string;
   /** Where orders come from. Fusion reads the 1inch feed; cow reads settled
    *  CoW trades from chain logs, which is a price comparison, not a race. */
-  orderSource?: 'fusion' | 'cow';
+  orderSource?: 'fusion' | 'cow' | 'cow-solver';
   /** CoW Protocol network slug, on chains where it runs. */
   cowChainSlug?: string;
   /** Bebop stream slug, where it differs from the Kyber one. */
@@ -233,10 +233,84 @@ const profiles: Record<string, ChainProfile> = {
       'USDT and DAI orders are priced against KalqiX\'s USDC books, treating one dollar stablecoin as another. The basis between them is ignored, which at these edge sizes is not always negligible: a 5 bps USDC/DAI dislocation is a material fraction of a 10 bps edge.',
     ],
   },
+  cowswapSolver: {
+    chainId: 1,
+    label: 'CoW Solver Simulation',
+    schemaOverride: 'cowswap_solver_1',
+    orderSource: 'cow-solver',
+    // Above the ~15s structural floor, so it separates clean samples from
+    // lagged ones. At 30s it sat below the old 41s floor and flagged every
+    // single tick, which made the signal useless.
+    quoteLagToleranceMs: 25_000,
+    wethAddress: WETH_ETHEREUM,
+    pairs: [
+      {
+        ticker: 'ETH_USDC',
+        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
+        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ETHEREUM] },
+        kalqix: { ticker: 'ETH_USDC', baseDecimals: 18, quoteDecimals: 6 },
+      },
+      {
+        ticker: 'cbBTC_USDC',
+        base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
+        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ETHEREUM] },
+        kalqix: { ticker: 'cbBTC_USDC', baseDecimals: 8, quoteDecimals: 6 },
+      },
+      // KalqiX lists only ETH/USDC and cbBTC/USDC, but a dollar is a dollar for
+      // our purposes, so the USDT and DAI pairs are priced off the same books.
+      // Note the decimals: DAI is 18dp against USDC's 6dp, which rescaleBook
+      // handles — get that wrong and every DAI figure is out by 10^12.
+      {
+        ticker: 'ETH_USDT',
+        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
+        quote: { symbol: 'USDT', decimals: 6, addresses: [USDT_ETHEREUM] },
+        kalqix: { ticker: 'ETH_USDC', baseDecimals: 18, quoteDecimals: 6 },
+      },
+      {
+        ticker: 'ETH_DAI',
+        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
+        quote: { symbol: 'DAI', decimals: 18, addresses: [DAI_ETHEREUM] },
+        kalqix: { ticker: 'ETH_USDC', baseDecimals: 18, quoteDecimals: 6 },
+      },
+      {
+        ticker: 'WBTC_USDT',
+        base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
+        quote: { symbol: 'USDT', decimals: 6, addresses: [USDT_ETHEREUM] },
+        kalqix: { ticker: 'cbBTC_USDC', baseDecimals: 8, quoteDecimals: 6 },
+      },
+      {
+        // crypto-crypto, so there is no stable leg and its USD notional is null
+        ticker: 'WBTC_ETH',
+        base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
+        quote: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM] },
+      },
+    ],
+    rpcEnvVar: 'ETH_RPC_URL',
+    rpcUrlDefault: 'https://ethereum.publicnode.com',
+    dashPortDefault: 8791,
+    kyberChainSlug: 'ethereum',
+    cowChainSlug: 'mainnet',
+    // Shares chain 1 with cowswapResolver, and the key allows one socket per
+    // chain: both read from the relay so neither can lock the other out.
+    bebopMode: 'relay',
+    venues: ['kalqix', 'kyber', 'bebop'],
+    nativeTicker: 'ETH_USDC',
+    nativeSymbol: 'ETH',
+    stableSymbol: 'USDC',
+    kyberOnlySkipPairs: [],
+    reportCaveats: [
+      'This simulates bidding as a CoW solver. Quotes are taken while the order is open, before the winner is known; the bid is then compared with the winning solver\'s score; then the venues are re-quoted to see whether the price we bid on was still there once we knew we had won.',
+      'We never actually submit a solution, so every win here is counterfactual. Our presence would have changed what rivals bid, which makes these win rates an upper bound rather than a forecast.',
+      'Our score is reproduced from surplus valued at the auction\'s own native prices. It currently matches CoW\'s reported score to about 96%, so win rates near the margin are provisional until that gap closes.',
+      'USDT and DAI orders are priced against KalqiX\'s USDC books, treating one dollar stablecoin as another. The basis between them is ignored.',
+    ],
+
+  },
 };
 profiles.eth = profiles.ethereum!;
 profiles.bnb = profiles.bsc!;
 profiles.cowswapresolver = profiles.cowswapResolver!;
+profiles.cowswapsolver = profiles.cowswapSolver!;
 profiles.cow = profiles.cowswapResolver!;
 
 // `||`, not `??`: .env.example ships CHAIN= as an empty placeholder, and the
@@ -386,6 +460,21 @@ export const config = {
      *  fast path only won ~10% more rows for it, and now that by_tx_hash gives
      *  the backstop its scores anyway, lag is the only thing left to protect. */
     backstopGraceMs: 15_000,
+    /** --- solver simulation --- */
+    /** How often each open order is re-quoted while it waits for its auction.
+     *  The bid is whatever the latest pre-resolution quote was, so this sets how
+     *  stale a bid can be; orders live ~59s median, so this gives several. */
+    solverQuoteIntervalMs: 10_000,
+    /** Most solvable orders are long-dated resting limit orders that will never
+     *  fill near touch. Quoting all 7,700 would flood the database for no
+     *  signal, so only orders whose limit is within this of the current venue
+     *  price are tracked. */
+    solverMaxDistanceBps: 250n,
+    /** Hard ceiling on orders quoted at once, whatever the filter admits. */
+    solverMaxTracked: 12,
+    /** Wait after learning we won before re-quoting, to model the gap a real
+     *  solver faces between winning and its settlement landing. */
+    solverHoldDelaysMs: [0, 12_000],
   },
   pancake: {
     /** our assumed markup on a PancakeSwap-hedged fill, same basis as the others */
@@ -432,11 +521,11 @@ export interface ResolvedChain {
   pairs: PairConfig[];
   rpcUrl: string;
   schemaOverride: string | null;
-  orderSource: 'fusion' | 'cow';
+  orderSource: 'fusion' | 'cow' | 'cow-solver';
   venues: Array<'kalqix' | 'kyber' | 'bebop' | 'pancake'>;
 }
 
-export const allChains: ResolvedChain[] = ['ethereum', 'bsc', 'cowswapResolver'].map((key) => {
+export const allChains: ResolvedChain[] = ['ethereum', 'bsc', 'cowswapResolver', 'cowswapSolver'].map((key) => {
   const p = profiles[key]!;
   return {
     key,
