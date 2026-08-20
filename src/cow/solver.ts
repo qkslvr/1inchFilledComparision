@@ -484,7 +484,10 @@ async function pollAuction(): Promise<void> {
   const now = Date.now();
   for (const [uid, t] of [...tracked]) {
     const tooOld = now - t.discoveredAtMs > config.cow.solverMaxTrackAgeMs;
-    const expired = t.order.validToMs > 0 && t.order.validToMs < now;
+    // Past validTo is not the end of the story: the settlement that decides
+    // the auction usually lands at or just after it, and that is the moment
+    // we are waiting for.
+    const expired = t.order.validToMs > 0 && now - t.order.validToMs > config.cow.solverExpiryGraceMs;
     if (!tooOld && !expired) continue;
     tracked.delete(uid);
     evicted++;

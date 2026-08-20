@@ -464,7 +464,7 @@ export const config = {
     /** How often each open order is re-quoted while it waits for its auction.
      *  The bid is whatever the latest pre-resolution quote was, so this sets how
      *  stale a bid can be; orders live ~59s median, so this gives several. */
-    solverQuoteIntervalMs: 10_000,
+    solverQuoteIntervalMs: 4_000,
     /** Most solvable orders are long-dated resting limit orders that will never
      *  fill near touch. Quoting all 7,700 would flood the database for no
      *  signal, so only orders whose limit is within this of the current venue
@@ -481,6 +481,14 @@ export const config = {
      *  minutes is a resting limit order that may never fill near touch. Holding
      *  a slot for it starves the live flow the simulation exists to measure. */
     solverMaxTrackAgeMs: 300_000,
+    /** Keep watching an order for this long after its validTo passes.
+     *
+     *  Measured: orders arrive with only 6-26s of validity left once our ~13s
+     *  detection lag has run, and the settlement lands at or just after validTo.
+     *  Evicting the instant validTo passed dropped every order a moment before
+     *  the auction that would have graded it — discovered=10, evicted=10,
+     *  tracked=0, nothing ever resolved. */
+    solverExpiryGraceMs: 90_000,
   },
   pancake: {
     /** our assumed markup on a PancakeSwap-hedged fill, same basis as the others */
