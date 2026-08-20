@@ -475,6 +475,12 @@ export const config = {
     /** Wait after learning we won before re-quoting, to model the gap a real
      *  solver faces between winning and its settlement landing. */
     solverHoldDelaysMs: [0, 12_000],
+    /** Drop a tracked order that has not resolved in this long.
+     *
+     *  Settled orders live ~59s median, so anything still open after several
+     *  minutes is a resting limit order that may never fill near touch. Holding
+     *  a slot for it starves the live flow the simulation exists to measure. */
+    solverMaxTrackAgeMs: 300_000,
   },
   pancake: {
     /** our assumed markup on a PancakeSwap-hedged fill, same basis as the others */

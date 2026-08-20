@@ -206,16 +206,23 @@ interface Tracked {
   /** the last pre-resolution quote per venue — this is what we bid */
   lastQuotes: Map<Venue, VenueQuote>;
   lastQuoteAtMs: number;
+  discoveredAtMs: number;
 }
 
 const tracked = new Map<string, Tracked>();
 const seenUids = new Set<string>();
+/** The solvable set already contains ~7,700 orders when we start, nearly all of
+ *  them long-dated limit orders resting far from market. Bidding on those fills
+ *  every slot with things that may never settle, so the first snapshot is used
+ *  only to learn what already exists; we bid on what arrives after. */
+let seeded = false;
 let latestPrices = new Map<string, bigint>();
 let discovered = 0;
 let bidsPlaced = 0;
 let resolvedCount = 0;
 let wonCount = 0;
 let holdChecks = 0;
+let evicted = 0;
 
 /** Write one quote round as a tick, and update the standing bid.
  *
@@ -385,6 +392,7 @@ async function consider(uid: string): Promise<void> {
     quoteRounds: 0,
     lastQuotes: new Map(),
     lastQuoteAtMs: 0,
+    discoveredAtMs: Date.now(),
   };
   const quotes = await quoteVenues(order, match.pair, match.direction);
   let best: VenueQuote | null = null;
@@ -448,13 +456,30 @@ async function pollAuction(): Promise<void> {
     if (t) await resolve(t, snap, s.buyAmount);
   }
 
-  // Then discovery. The solvable set is ~7,700 uids but turns over by only a
-  // handful per auction, so this is a few lookups rather than thousands.
+  // Free slots held by orders that are not going to resolve. Without this the
+  // tracker fills once and never turns over, and nothing ever gets graded.
+  const now = Date.now();
+  for (const [uid, t] of [...tracked]) {
+    const tooOld = now - t.discoveredAtMs > config.cow.solverMaxTrackAgeMs;
+    const expired = t.order.validToMs > 0 && t.order.validToMs < now;
+    if (!tooOld && !expired) continue;
+    tracked.delete(uid);
+    evicted++;
+    db.setTerminal(uid, expired ? 'expired' : 'unresolved', null, 0n, 0n);
+  }
+
+  // Then discovery. The solvable set turns over by only a handful of uids per
+  // auction, so this is a few lookups rather than thousands.
   for (const uid of snap.orderUids) {
     if (seenUids.has(uid)) continue;
     seenUids.add(uid);
+    if (!seeded) continue; // startup backlog: noted, not bid on
     if (tracked.size >= config.cow.solverMaxTracked) continue;
     await consider(uid).catch((err) => logError(`consider ${uid.slice(0, 12)}`, err));
+  }
+  if (!seeded) {
+    seeded = true;
+    log(`seeded from ${seenUids.size} standing orders; bidding on new arrivals only`);
   }
   if (seenUids.size > 50_000) seenUids.clear();
 }
@@ -482,7 +507,7 @@ const quoteTimer = setInterval(() => {
 const status = setInterval(() => {
   log(
     `status: tracked=${tracked.size} discovered=${discovered} bids=${bidsPlaced} ` +
-      `resolved=${resolvedCount} won=${wonCount} holdChecks=${holdChecks} ` +
+      `resolved=${resolvedCount} won=${wonCount} holdChecks=${holdChecks} evicted=${evicted} ` +
       `bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'} ` +
       (db.storagePressure ? ` STORAGE-PRESSURE(${db.droppedTicks} dropped)` : '')
   );
