@@ -102,29 +102,52 @@ our wins.
 
 ## Feasibility: can we bid before the outcome is known?
 
-The whole simulation depends on seeing an order *while it is open*. Measured
-over 25 consecutive auctions:
+Yes — for effectively all of it. Measured two ways, because the first way was
+wrong and the correction matters.
+
+### The wrong measurement
+
+Counting "did *we* see the order open in an earlier auction than the one that
+settled it" gave 9/27 (33%), and it was reported as a hard coverage ceiling.
+It is not. It measures **our sampling cadence**, not the order's lifetime.
+`/latest` exposes one auction at a time and advances every ~13s; the earlier run
+happened to capture a new auction only every ~36s. An order living 59s therefore
+got one or two chances to appear in a sampled solvable set, and when its first
+appearance was also the auction that settled it, it was bucketed as "no lead".
+
+### The right measurement
+
+`creationDate` on the order gives the true open lifetime, independent of how
+often we look:
 
 ```
-settled orders observed                                    27
-visible in the solvable set BEFORE their settling auction   9  (33%)
-    lead: min 15s   median 558s (~9 min)   max 879s
-    (median 13 auctions of visibility)
-appeared and settled in the same auction                   18  (67%)
+settled orders sampled                                 26
+open lifetime (created -> settled)
+  min 38s   p25 45s   median 59s   p75 70s   max 40 days
+  open >=  10s :  26/26  (100%)
+  open >=  30s :  26/26  (100%)
+  open >=  60s :  11/26  (42%)
+  open >= 300s :   4/26  (15%)
 ```
 
-**A third of settled flow is biddable with minutes of lead.** That is the
-population this simulation covers, and it is comfortably enough time to
-maintain a rolling quote.
+**Every settled order was biddable for at least 38 seconds.** Nothing arrives
+and settles instantly. The ~38s floor is CoW's own pipeline — an order has to be
+picked up into an auction, competed over, and settled.
 
-The other two thirds enter and settle inside one auction. We cannot bid on them
-ahead of time and they are **excluded**, not silently counted as losses. The
-dashboard must state the coverage fraction or every rate on it is misleading.
+### What actually constrains us
 
-Caveat on the measurement: the window was 25 auctions, so orders already open
-when it started have truncated leads, and orders settling in the first auctions
-are mis-attributed to the "same auction" bucket. The 33% is therefore a
-**lower bound**. Re-measure over a longer window during implementation.
+Not the flow: our own detection lag.
+
+- `/latest` advances every **13s median** (min 5s, max 52s), and each payload
+  carries the complete solvable set, so one observation captures every open
+  order at that instant.
+- Detection lag is therefore ~13s median against a ~59s median lifetime,
+  leaving ~46s to quote and form a bid.
+
+The metric to report is not "coverage" but **quote readiness**: what fraction of
+an order's open life we had a live bid standing for. That is a measure of our
+implementation quality, and improvable, rather than a property of CoW we are
+stuck with.
 
 ## The simulation loop
 
@@ -135,9 +158,12 @@ are mis-attributed to the "same auction" bucket. The 33% is therefore a
    per auction, so this is a handful of lookups, not 7,742.
 3. For each new uid, `GET /api/v1/orders/{uid}` for the signed limit.
 4. Keep only orders on pairs we can hedge, still `open`, and not expired.
-5. **Never quote the standing set indiscriminately.** A sample of it was 100%
-   long-dated resting limit orders; ticking those is what filled the disk on
-   BNB. Filter to orders within a configurable distance of market.
+5. **Never quote the standing set indiscriminately.** 7,742 orders are solvable
+   at any moment and most are long-dated resting limit orders that will never
+   fill near touch; ticking those is what filled the disk on BNB. Filter to
+   orders within a configurable distance of market. Note that `class` does not
+   help here — every settled order sampled was `class: limit`, so the field
+   does not separate live flow from resting orders.
 
 ### Phase B — quote continuously
 
@@ -182,8 +208,9 @@ Per venue (KalqiX, Kyber, Bebop) and for best-of:
   settlement. *This is the headline number.*
 - Median score margin vs the winner, in bps.
 - Median slippage on re-quote.
-- **Coverage** — biddable orders as a fraction of all settled flow (~33%), so
-  no rate is read as applying to all CoW volume.
+- **Quote readiness** — fraction of each order's open life we had a live bid
+  standing for. Detection lag makes this less than 100%, and a win rate over
+  orders we were slow to see is not the same as a win rate over all flow.
 
 Also worth surfacing: **effective win rate = win rate × quote-hold %**. Winning
 an auction you cannot honour is not a win.
@@ -222,7 +249,10 @@ State these on the page, not just here.
    would bid higher against us. A counterfactual win rate is an upper bound.
 2. **We cannot submit solutions** without being a registered solver, so no
    result here is confirmable end-to-end.
-3. **Coverage is ~33%** of settled flow. Nothing here describes the other 67%.
+3. **Quote readiness is not 100%.** Detection lag (~13s median) means we miss
+   the opening seconds of an order's life. Report the fraction of each order's
+   open life we had a standing bid for, and never imply we could have bid from
+   the instant of creation.
 4. **The score model is 96.4% reconciled.** Until the protocol-fee gap is
    closed, treat win rates as provisional.
 5. Cross-chain inventory cost is ignored, as in the other datasets — KalqiX
@@ -237,7 +267,8 @@ State these on the page, not just here.
 3. Run alongside `cowswapResolver` for several days; the two must agree on the
    trades they both see.
 4. Sanity-check one won auction by hand, end to end.
-5. Confirm coverage % is reported and matches a fresh measurement.
+5. Confirm quote readiness is reported, and re-measure open lifetimes over a
+   longer window than the 26-order sample behind the numbers above.
 
 ## Open questions
 
