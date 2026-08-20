@@ -223,6 +223,9 @@ let resolvedCount = 0;
 let wonCount = 0;
 let holdChecks = 0;
 let evicted = 0;
+/** Why candidates were turned away. Without this the tracker reporting zero is
+ *  indistinguishable from the feed being empty, which cost an afternoon. */
+const rejected = { lookup: 0, notOpen: 0, expired: 0, noPair: 0, noQuote: 0, tooFar: 0, newUids: 0 };
 
 /** Write one quote round as a tick, and update the standing bid.
  *
@@ -377,10 +380,23 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
 async function consider(uid: string): Promise<void> {
   if (tracked.size >= config.cow.solverMaxTracked) return;
   const order = await fetchSignedOrder(uid);
-  if (!order || order.status !== 'open') return;
-  if (order.validToMs && order.validToMs < Date.now()) return;
+  if (!order) {
+    rejected.lookup++;
+    return;
+  }
+  if (order.status !== 'open') {
+    rejected.notOpen++;
+    return;
+  }
+  if (order.validToMs && order.validToMs < Date.now()) {
+    rejected.expired++;
+    return;
+  }
   const match = pairForTokens(wethFor(order.sellToken), wethFor(order.buyToken));
-  if (!match) return;
+  if (!match) {
+    rejected.noPair++;
+    return;
+  }
   // Most of the solvable set is long-dated limit orders resting far from market.
   // Quoting them all would flood the database for no signal, so an order has to
   // be within reach of a price we can actually source before we track it.
@@ -397,9 +413,16 @@ async function consider(uid: string): Promise<void> {
   const quotes = await quoteVenues(order, match.pair, match.direction);
   let best: VenueQuote | null = null;
   for (const q of quotes.values()) if (!best || q.net > best.net) best = q;
-  if (!best) return;
+  if (!best) {
+    rejected.noQuote++;
+    return;
+  }
   const distanceBps = Number(((order.buyAmount - best.net) * 10_000n) / order.buyAmount);
-  if (distanceBps > Number(config.cow.solverMaxDistanceBps)) return;
+  if (distanceBps > Number(config.cow.solverMaxDistanceBps)) {
+    rejected.tooFar++;
+    log(`skip ${uid.slice(0, 12)} ${match.pair.ticker}: ${distanceBps} bps from our best price`);
+    return;
+  }
 
   await db.insertOrder({
     orderHash: order.uid,
@@ -474,6 +497,7 @@ async function pollAuction(): Promise<void> {
     if (seenUids.has(uid)) continue;
     seenUids.add(uid);
     if (!seeded) continue; // startup backlog: noted, not bid on
+    rejected.newUids++;
     if (tracked.size >= config.cow.solverMaxTracked) continue;
     await consider(uid).catch((err) => logError(`consider ${uid.slice(0, 12)}`, err));
   }
@@ -508,6 +532,8 @@ const status = setInterval(() => {
   log(
     `status: tracked=${tracked.size} discovered=${discovered} bids=${bidsPlaced} ` +
       `resolved=${resolvedCount} won=${wonCount} holdChecks=${holdChecks} evicted=${evicted} ` +
+      `new=${rejected.newUids} rejected(lookup=${rejected.lookup} notOpen=${rejected.notOpen} ` +
+      `expired=${rejected.expired} noPair=${rejected.noPair} noQuote=${rejected.noQuote} tooFar=${rejected.tooFar}) ` +
       `bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'} ` +
       (db.storagePressure ? ` STORAGE-PRESSURE(${db.droppedTicks} dropped)` : '')
   );
