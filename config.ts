@@ -185,24 +185,27 @@ const profiles: Record<string, ChainProfile> = {
         quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ETHEREUM] },
         kalqix: { ticker: 'cbBTC_USDC', baseDecimals: 8, quoteDecimals: 6 },
       },
-      // KalqiX lists only ETH/USDC and cbBTC/USDC, so the pairs below carry no
-      // kalqix mapping and its column reads "no data" for them — deliberately.
-      // Kyber and Bebop quote all of them, and CoW's flow is far wider than two
-      // pairs: with only those two, twelve consecutive settlements matched none.
+      // KalqiX lists only ETH/USDC and cbBTC/USDC, but a dollar is a dollar for
+      // our purposes, so the USDT and DAI pairs are priced off the same books.
+      // Note the decimals: DAI is 18dp against USDC's 6dp, which rescaleBook
+      // handles — get that wrong and every DAI figure is out by 10^12.
       {
         ticker: 'ETH_USDT',
         base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
         quote: { symbol: 'USDT', decimals: 6, addresses: [USDT_ETHEREUM] },
+        kalqix: { ticker: 'ETH_USDC', baseDecimals: 18, quoteDecimals: 6 },
       },
       {
         ticker: 'ETH_DAI',
         base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
         quote: { symbol: 'DAI', decimals: 18, addresses: [DAI_ETHEREUM] },
+        kalqix: { ticker: 'ETH_USDC', baseDecimals: 18, quoteDecimals: 6 },
       },
       {
         ticker: 'WBTC_USDT',
         base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
         quote: { symbol: 'USDT', decimals: 6, addresses: [USDT_ETHEREUM] },
+        kalqix: { ticker: 'cbBTC_USDC', baseDecimals: 8, quoteDecimals: 6 },
       },
       {
         // crypto-crypto, so there is no stable leg and its USD notional is null
@@ -227,6 +230,7 @@ const profiles: Record<string, ChainProfile> = {
     reportCaveats: [
       'Orders here are CoW trades that have already settled: CoW\'s open-order endpoint is solver-only, so they cannot be observed while live. This is therefore a price comparison, not a race — there is no lead time and no "profitable too late" verdict, because we never saw the order in flight.',
       'Venue quotes are necessarily taken after the settling block. The lag is recorded per tick and a comparison beyond the degraded threshold is marked as such.',
+      'USDT and DAI orders are priced against KalqiX\'s USDC books, treating one dollar stablecoin as another. The basis between them is ignored, which at these edge sizes is not always negligible: a 5 bps USDC/DAI dislocation is a material fraction of a 10 bps edge.',
     ],
   },
 };

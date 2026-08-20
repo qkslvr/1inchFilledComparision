@@ -22,14 +22,14 @@
 import { config, pairForTokens } from '../../config.js';
 import { Db, type TickInsert } from '../db/db.js';
 import { GasPoller } from '../gas/poller.js';
-import { RefPriceLoop, Sampler } from '../kalqix/sampler.js';
+import { RefPriceLoop, Sampler, rescaleBookDecimals } from '../kalqix/sampler.js';
 import { chooseBookFetcher } from '../kalqix/client.js';
 import { fetchKyberQuote } from '../kyber/client.js';
 import { createBebopSource } from '../bebop/source.js';
 import { walkBuyBaseFloat, walkSellBaseFloat } from '../bebop/depth.js';
 import { walkBuyBase, walkSellBase } from '../kalqix/book.js';
 import { SettlementFeed, type CowTrade } from './settlements.js';
-import { CompetitionFeed, type CowCompetition } from './competition.js';
+import { CompetitionFeed, fetchCompetitionByTx, type CowCompetition } from './competition.js';
 import { bpsOfCeil, ppmOfCeil, quoteForBaseCeil, rescale, toFloat } from '../pricing/units.js';
 import { buildDecidedOutcome, OUTCOME_ORDER_SQL, OUTCOME_TICK_SQL } from '../report/outcome.js';
 import { NATIVE_SENTINEL } from '../../config.js';
@@ -57,9 +57,29 @@ const { fetcher: bookFetcher } = config.hasKalqix
 // Unlike the Fusion collector these run continuously rather than only while an
 // order is live: a settlement arrives without warning and the book has to
 // already be there to price it.
-const samplers = new Map<string, Sampler>(
-  config.pairs.filter((p) => p.kalqix).map((p) => [p.ticker, new Sampler(p, db, () => runId, bookFetcher)])
-);
+// One sampler per KalqiX *market*, not per pair. ETH/USDT and ETH/DAI are both
+// priced off the ETH/USDC book, and a sampler each would fetch the same book
+// three times a second and write three snapshot rows for it — snapshots were
+// already the bulk of this schema's size on disk.
+const kalqixPairs = config.pairs.filter((p) => p.kalqix);
+const marketSamplers = new Map<string, { sampler: Sampler; baseDecimals: number; quoteDecimals: number }>();
+for (const pair of kalqixPairs) {
+  const k = pair.kalqix!;
+  if (marketSamplers.has(k.ticker)) continue;
+  // Sample in the market's own decimals so it can be restated for any pair that
+  // uses it; rescaleBook is then a no-op for this one and explicit for the rest.
+  const canonical = kalqixPairs.find(
+    (p) => p.kalqix!.ticker === k.ticker &&
+      p.base.decimals === p.kalqix!.baseDecimals &&
+      p.quote.decimals === p.kalqix!.quoteDecimals
+  ) ?? pair;
+  marketSamplers.set(k.ticker, {
+    sampler: new Sampler(canonical, db, () => runId, bookFetcher),
+    baseDecimals: canonical.base.decimals,
+    quoteDecimals: canonical.quote.decimals,
+  });
+}
+const samplers = new Map([...marketSamplers].map(([market, m]) => [market, m.sampler]));
 await gas.start();
 await refPrices.start();
 await bebop.start();
@@ -138,12 +158,23 @@ async function evaluateInner(
   let hedgeProceeds: bigint | null = null;
   let insufficientDepth = false;
   let feeCost: bigint | null = null;
-  const snap = samplers.get(pair.ticker)?.latest ?? null;
-  if (snap) {
+  const market = pair.kalqix ? marketSamplers.get(pair.kalqix.ticker) ?? null : null;
+  const snap = market?.sampler.latest ?? null;
+  if (snap && pair.kalqix) {
+    // The book is kept in its market's decimals; restate it into this pair's.
+    // For ETH/DAI that moves every price 12 places, because DAI is 18dp and the
+    // USDC book it is priced from is 6dp.
+    const book = rescaleBookDecimals(
+      snap.book,
+      market!.baseDecimals,
+      market!.quoteDecimals,
+      pair.base.decimals,
+      pair.quote.decimals
+    );
     const walk =
       direction === 'SELL_BASE'
-        ? walkSellBase(snap.book.bids, trade.sellAmount, pair.base.decimals)
-        : walkBuyBase(snap.book.asks, trade.sellAmount, pair.base.decimals);
+        ? walkSellBase(book.bids, trade.sellAmount, pair.base.decimals)
+        : walkBuyBase(book.asks, trade.sellAmount, pair.base.decimals);
     hedgeProceeds = walk.proceeds;
     insufficientDepth = walk.proceeds === null;
     if (hedgeProceeds !== null) feeCost = ppmOfCeil(hedgeProceeds, config.kalqixTakerFeeBps * 100n);
@@ -320,9 +351,12 @@ const competition = new CompetitionFeed((t, c) => {
 });
 // Backstop: anything the competition feed missed still shows up on chain.
 const feed = new SettlementFeed((t) => {
-  void evaluate(t, null, 'chain').catch((err) =>
-    logError(`evaluate ${t.orderUid.slice(0, 12)} failed`, err)
-  );
+  void (async () => {
+    // Recover the solver scores for auctions the live feed skipped. Without
+    // this the backstop's rows — most of them — carry no competition at all.
+    const comp = t.txHash ? await fetchCompetitionByTx(t.txHash) : null;
+    await evaluate(t, comp, 'chain');
+  })().catch((err) => logError(`evaluate ${t.orderUid.slice(0, 12)} failed`, err));
 });
 await competition.start();
 await feed.start();

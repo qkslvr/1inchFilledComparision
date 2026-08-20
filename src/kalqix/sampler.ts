@@ -2,7 +2,7 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 import { config, NATIVE_SENTINEL } from '../../config.js';
 import { pancakeSpot } from '../pancake/quoter.js';
 import { rescale } from '../pricing/units.js';
-import type { PairConfig, ParsedBook, SnapshotRecord } from '../types.js';
+import type { BookLevel, PairConfig, ParsedBook, SnapshotRecord } from '../types.js';
 import type { Db } from '../db/db.js';
 import { fetchOrderBook, KalqixRateLimitError, type BookFetcher } from './client.js';
 import { bestAsk, bestBid, depthBase, mid } from './book.js';
@@ -35,16 +35,30 @@ export function deserializeBook(gz: Buffer): ParsedBook {
  *  quantities are base units and move with the base scale. Converting here
  *  means every walk, mid and depth figure downstream is already in the units
  *  the order is denominated in. */
-export function rescaleBook(book: ParsedBook, pair: PairConfig): ParsedBook {
-  const k = pair.kalqix;
-  if (!k || (k.baseDecimals === pair.base.decimals && k.quoteDecimals === pair.quote.decimals)) {
-    return book;
-  }
-  const level = (l: { price: bigint; qty: bigint }) => ({
-    price: rescale(l.price, k.quoteDecimals, pair.quote.decimals),
-    qty: rescale(l.qty, k.baseDecimals, pair.base.decimals),
+/** Restate a book from one pair of decimals into another.
+ *
+ *  Split out from rescaleBook so a single KalqiX market can serve several of our
+ *  pairs: the ETH/USDC book prices ETH/USDT and ETH/DAI too, but DAI is 18dp
+ *  against USDC's 6dp, so the levels have to be moved 12 places. */
+export function rescaleBookDecimals(
+  book: ParsedBook,
+  fromBase: number,
+  fromQuote: number,
+  toBase: number,
+  toQuote: number
+): ParsedBook {
+  if (fromBase === toBase && fromQuote === toQuote) return book;
+  const level = (l: BookLevel): BookLevel => ({
+    price: rescale(l.price, fromQuote, toQuote),
+    qty: rescale(l.qty, fromBase, toBase),
   });
   return { bids: book.bids.map(level), asks: book.asks.map(level) };
+}
+
+export function rescaleBook(book: ParsedBook, pair: PairConfig): ParsedBook {
+  const k = pair.kalqix;
+  if (!k) return book;
+  return rescaleBookDecimals(book, k.baseDecimals, k.quoteDecimals, pair.base.decimals, pair.quote.decimals);
 }
 
 export class Sampler {

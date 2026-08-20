@@ -26,6 +26,7 @@ import { logError } from '../log.js';
 import { blockTimestampMs, type CowTrade } from './settlements.js';
 
 const LATEST = 'https://api.cow.fi/mainnet/api/v2/solver_competition/latest';
+const BY_TX = 'https://api.cow.fi/mainnet/api/v2/solver_competition/by_tx_hash';
 
 /** What the auction cost us to win, and who we would have had to beat. */
 export interface CowCompetition {
@@ -125,6 +126,27 @@ export function tradesFromCompetition(
     });
   }
   return { competition, trades };
+}
+
+/** The competition behind a settlement we found on chain.
+ *
+ *  The live feed returns one auction at a time, so when several are decided
+ *  between polls we lose the ones in between and only meet those trades later,
+ *  in a Trade log. Looking the auction up by its settlement hash recovers the
+ *  solver scores for exactly those, which is the difference between a row that
+ *  can answer "would we have won" and one that cannot. */
+export async function fetchCompetitionByTx(txHash: string): Promise<CowCompetition | null> {
+  try {
+    const res = await fetch(`${BY_TX}/${txHash}`, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+    return tradesFromCompetition((await res.json()) as RawCompetition)?.competition ?? null;
+  } catch (err) {
+    logError(`cow competition lookup failed for ${txHash.slice(0, 12)}`, err);
+    return null;
+  }
 }
 
 /** Polls the public competition feed for newly decided auctions. */
