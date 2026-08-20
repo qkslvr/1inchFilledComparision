@@ -481,6 +481,10 @@ async function collectSolver(db: Db) {
       sizeUsd: r.size_usd === null ? null : Number(r.size_usd),
       venue: r.our_best_venue,
       won: r.won === 1,
+      // A zero score is not a bad bid, it is the absence of one: our best venue
+      // could not even clear the user's limit price. As a margin that lands on
+      // exactly -10000 bps, which reads as a real (and absurd) price gap.
+      noBid: r.our_score !== null && BigInt(r.our_score) === 0n,
       marginBps: r.score_margin_bps === null ? null : Number(r.score_margin_bps),
       solverCount: r.cow_solver_count === null ? null : Number(r.cow_solver_count),
       quoteRounds: Number(r.quote_rounds ?? 0),

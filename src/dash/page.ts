@@ -236,9 +236,11 @@ function solverSection(c) {
 }
 
 function solverRow(o) {
-  var res = o.won
-    ? '<span class="chip win">would have won</span>'
-    : '<span class="chip">outbid</span>';
+  var res = o.noBid
+    ? '<span class="chip">no viable bid</span>'
+    : o.won
+      ? '<span class="chip win">would have won</span>'
+      : '<span class="chip">outbid</span>';
   var held = o.held === null ? '<span class="mut">—</span>'
     : o.held ? '<span class="chip win">held</span>' : '<span class="chip short">slipped</span>';
   return '<tr'
@@ -251,7 +253,8 @@ function solverRow(o) {
     + '<td class="num" data-v="' + (o.sizeUsd === null ? -1 : o.sizeUsd) + '">' + esc(usd(o.sizeUsd)) + '</td>'
     + '<td>' + esc(o.venue || '') + '</td>'
     + '<td>' + res + '</td>'
-    + '<td class="num" data-v="' + (o.marginBps === null ? -1e9 : o.marginBps) + '">' + bps(o.marginBps) + '</td>'
+    + '<td class="num" data-v="' + (o.marginBps === null ? -1e9 : o.marginBps) + '">'
+    + (o.noBid ? '<span class="mut">—</span>' : bps(o.marginBps)) + '</td>'
     + '<td class="num" data-v="' + (o.slippageBps === null ? -1e9 : o.slippageBps) + '">' + bps(o.slippageBps) + '</td>'
     + '<td>' + held + '</td>'
     + '<td class="num" data-v="' + o.quoteRounds + '">' + o.quoteRounds + '</td>'
