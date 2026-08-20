@@ -45,7 +45,19 @@ if ! pgrep -f "tsx src/cow/resolve[r].ts" > /dev/null 2>&1; then
   sleep 2
 fi
 
-for chain in ethereum bsc; do
+# Fusion collectors, off since 2026-08-20. The project now only follows CoW Swap
+# on Ethereum, and the two 1inch collectors were the entire 1inch spend plus
+# ~10 req/s of KyberSwap traffic against a 3 req/s budget — which is why Kyber
+# was returning 429 and the cow resolver kept recording "no data".
+#
+# Their data is untouched in chain_1 and chain_56 and still served by the
+# dashboard. To bring one back, put it in the list:
+#
+#   FUSION_CHAINS="ethereum bsc"
+#
+FUSION_CHAINS="${FUSION_CHAINS:-}"
+
+for chain in $FUSION_CHAINS; do
   # The chain is an argument to run-collector.sh, so it appears in the command
   # line. The bracket keeps this pattern from matching the script's own cmdline.
   if pgrep -f "run-collecto[r].sh $chain" > /dev/null 2>&1; then
