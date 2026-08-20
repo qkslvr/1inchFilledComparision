@@ -217,6 +217,7 @@ function solverSection(c) {
     + '</div>';
 
   h += '<h4>Bids — quoted before the winner was known, then re-quoted after</h4>';
+  h += '<p class="mut" style="font-size:12px;margin:0 0 4px">Margin is against the best price any rival offered on <em>this</em> order — not the winning solution\u2019s total, which covers its whole bundle. "rivals" counts solvers that bid on this order; "solvers" counts every solution in the batch.</p>';
   h += '<div class="controls">'
     + '<input id="fq" placeholder="filter: pair, venue…" oninput="applyFilters()">'
     + '<select id="fv" onchange="applyFilters()"><option value="">all venues</option>'
@@ -227,7 +228,7 @@ function solverSection(c) {
     + '<option value="held">quote held</option><option value="slipped">quote slipped</option></select>'
     + '<span class="mut" id="fcount"></span></div>';
 
-  var headers = ['ended', 'pair', '$size USD', 'venue', 'result', '$margin', '$slippage', 'held', '$quotes', '$lead s', '$solvers'];
+  var headers = ['ended', 'pair', '$size USD', 'venue', 'result', '$margin', '$slippage', 'held', '$quotes', '$lead s', '$rivals', '$solvers'];
   h += '<table id="solvertbl"><thead><tr>' + headers.map(function (t, i) {
     var num = t.charAt(0) === '$';
     return '<th class="sortable' + (num ? ' num' : '') + '" onclick="sortSolver(' + i + ')">' + esc(t.replace('$', '')) + '<span class="ind"></span></th>';
@@ -259,6 +260,7 @@ function solverRow(o) {
     + '<td>' + held + '</td>'
     + '<td class="num" data-v="' + o.quoteRounds + '">' + o.quoteRounds + '</td>'
     + '<td class="num" data-v="' + (o.bidLeadMs === null ? -1 : o.bidLeadMs) + '">' + (o.bidLeadMs === null ? '—' : (o.bidLeadMs / 1000).toFixed(0)) + '</td>'
+    + '<td class="num" data-v="' + (o.rivalCount === null ? -1 : o.rivalCount) + '">' + (o.rivalCount === null ? '—' : o.rivalCount) + '</td>'
     + '<td class="num" data-v="' + (o.solverCount === null ? -1 : o.solverCount) + '">' + (o.solverCount === null ? '—' : o.solverCount) + '</td>'
     + '</tr>';
 }

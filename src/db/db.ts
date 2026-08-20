@@ -698,10 +698,20 @@ export class Db {
   /** The outcome. `resolved_at_ms` also closes the order to further bidding:
    *  recordBid ignores rows that already have it, so a quote that lands after
    *  the winner is known can never become the bid we claim to have made. */
-  recordResolution(orderHash: string, resolvedAtMs: number, won: boolean, marginBps: number | null): void {
+  recordResolution(
+    orderHash: string,
+    resolvedAtMs: number,
+    won: boolean,
+    marginBps: number | null,
+    bestRivalScore: bigint | null,
+    bestRivalSolver: string | null,
+    rivalCount: number
+  ): void {
     this.enqueue(
-      `UPDATE orders SET resolved_at_ms = ?, won = ?, score_margin_bps = ? WHERE order_hash = ?`,
-      [resolvedAtMs, won ? 1 : 0, marginBps, orderHash]
+      `UPDATE orders SET resolved_at_ms = ?, won = ?, score_margin_bps = ?,
+         best_rival_score = ?, best_rival_solver = ?, rival_count = ?
+       WHERE order_hash = ?`,
+      [resolvedAtMs, won ? 1 : 0, marginBps, s(bestRivalScore), bestRivalSolver, rivalCount, orderHash]
     );
   }
 

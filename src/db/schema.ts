@@ -76,6 +76,11 @@ export const MIGRATIONS: string[] = [
      slippage_bps  DOUBLE PRECISION,
      PRIMARY KEY (order_hash, venue, delay_ms)
    )`,
+  // The bar that actually matters: the best price any rival offered on THIS
+  // order, rather than the winner's score for their whole bundle.
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS best_rival_score TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS best_rival_solver TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS rival_count INTEGER`,
   `ALTER TABLE quote_holds ADD COLUMN IF NOT EXISTS won SMALLINT`,
   `CREATE INDEX IF NOT EXISTS idx_holds_checked ON quote_holds(checked_at_ms DESC)`,
 ];
@@ -165,7 +170,10 @@ CREATE TABLE IF NOT EXISTS orders (
   bid_at_ms          BIGINT,
   resolved_at_ms     BIGINT,
   won                SMALLINT,
-  score_margin_bps   DOUBLE PRECISION
+  score_margin_bps   DOUBLE PRECISION,
+  best_rival_score   TEXT,
+  best_rival_solver  TEXT,
+  rival_count        INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS quote_holds (

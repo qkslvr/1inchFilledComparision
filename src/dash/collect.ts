@@ -410,7 +410,7 @@ async function collectSolver(db: Db) {
             FROM quote_holds GROUP BY 1, 2, 3`),
     db.all(`SELECT o.order_hash, o.pair, o.resolved_at_ms, o.won, o.score_margin_bps,
                    o.our_best_venue, o.our_score, o.cow_winner_score, o.cow_reference_score,
-                   o.cow_solver_count, o.size_usd, o.bid_at_ms,
+                   o.cow_solver_count, o.size_usd, o.bid_at_ms, o.rival_count, o.best_rival_solver,
                    (SELECT count(*) FROM ticks t WHERE t.order_hash = o.order_hash) AS quote_rounds,
                    (SELECT bool_and(h.held = 1) FROM quote_holds h WHERE h.order_hash = o.order_hash) AS all_held,
                    (SELECT max(h.slippage_bps) FROM quote_holds h WHERE h.order_hash = o.order_hash) AS worst_slippage_bps
@@ -487,6 +487,9 @@ async function collectSolver(db: Db) {
       noBid: r.our_score !== null && BigInt(r.our_score) === 0n,
       marginBps: r.score_margin_bps === null ? null : Number(r.score_margin_bps),
       solverCount: r.cow_solver_count === null ? null : Number(r.cow_solver_count),
+      // How many solvers actually bid on THIS order — the real field we were
+      // up against, as opposed to how many submitted a solution for the batch.
+      rivalCount: r.rival_count === null ? null : Number(r.rival_count),
       quoteRounds: Number(r.quote_rounds ?? 0),
       // null when we lost: there was nothing to honour, so "did it hold" is not
       // a question that was asked.

@@ -211,9 +211,23 @@ For every order in the working set, on an interval:
 
 ### Phase D — the auction resolves
 
-12. When the uid appears in a winner's solution, record:
-    `ourScore`, `winnerScore`, `referenceScore`, `winnerSolver`, `solverCount`.
-13. **WON** if `ourScore > winnerScore`, else **LOST**, with the margin in bps.
+12. When the uid appears in a winner's solution, record `ourScore` and the bar.
+13. **The bar is per order, not per solution.** Measured over 25 auctions: CoW
+    picks **multiple non-overlapping winners** (1 winner in 15 auctions, 2 in 6,
+    3 in 3, 4 in 1) and two winners never contended for the same order — not
+    once. A solution's `score` covers its whole bundle, so comparing our
+    single-order bid against it penalises us for volume we never bid on: a
+    solver bundling five orders out-scores us while possibly offering *this*
+    user less.
+
+    Every solution reports the `buyAmount` it would deliver **per order**, so
+    each rival is scored on exactly our order, against the same limit and the
+    same auction price. The bar is the best of those. **WON** if
+    `ourScore > bestRivalScore`.
+
+    Residual caveat: CoW's actual selection maximises total surplus across
+    non-overlapping solutions, so beating every rival on our order is a strong
+    proxy for winning it rather than a proof.
 14. Record which venue produced our best bid, so win rate is attributable.
 
 ### Phase E — does the quote hold? *(the point of the exercise)*

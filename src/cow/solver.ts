@@ -350,21 +350,36 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
   const bidQuotes = t.lastQuotes;
   tracked.delete(t.order.uid);
 
-  const winnerScore = snap.competition.winnerScore;
+  const price = snap.prices.get(t.order.buyToken) ?? latestPrices.get(t.order.buyToken);
   let ourScore: bigint | null = null;
   let best: { venue: Venue; q: VenueQuote } | null = null;
   for (const [venue, q] of bidQuotes) if (!best || q.net > best.q.net) best = { venue, q };
   if (best) {
-    ourScore = scoreOf({
-      ourBuyAmount: best.q.net,
-      limitBuyAmount: t.order.buyAmount,
-      buyTokenPrice: snap.prices.get(t.order.buyToken) ?? latestPrices.get(t.order.buyToken),
-    });
+    ourScore = scoreOf({ ourBuyAmount: best.q.net, limitBuyAmount: t.order.buyAmount, buyTokenPrice: price });
   }
 
-  const won = wouldHaveWon(ourScore, winnerScore);
-  const margin = ourScore !== null && winnerScore !== null ? scoreMarginBps(ourScore, winnerScore) : null;
-  db.recordResolution(t.order.uid, now, won, margin);
+  // The bar is what rivals offered on THIS order, not the winner's score for
+  // their whole bundle. A solver bundling five orders out-scores us on volume
+  // alone while possibly offering this user less, and comparing against that
+  // reported us as crushed on orders we may have won outright. Each solution
+  // states the buyAmount it would deliver per order, so every rival can be
+  // scored on exactly our order, against the same limit and the same price.
+  const proposals = snap.proposalsByOrder.get(t.order.uid) ?? [];
+  let bestRivalScore: bigint | null = null;
+  let bestRivalSolver: string | null = null;
+  for (const p of proposals) {
+    const rs = scoreOf({ ourBuyAmount: p.buyAmount, limitBuyAmount: t.order.buyAmount, buyTokenPrice: price });
+    if (rs === null) continue;
+    if (bestRivalScore === null || rs > bestRivalScore) {
+      bestRivalScore = rs;
+      bestRivalSolver = p.solver;
+    }
+  }
+
+  const won = wouldHaveWon(ourScore, bestRivalScore);
+  const margin =
+    ourScore !== null && bestRivalScore !== null ? scoreMarginBps(ourScore, bestRivalScore) : null;
+  db.recordResolution(t.order.uid, now, won, margin, bestRivalScore, bestRivalSolver, proposals.length);
   db.setTerminal(t.order.uid, 'filled', null, t.order.sellAmount, settledBuyAmount);
   await db.all(`UPDATE orders SET terminal_at_ms = ? WHERE order_hash = ?`, [now, t.order.uid]);
   await db.all(

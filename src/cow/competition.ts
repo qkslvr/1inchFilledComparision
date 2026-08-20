@@ -88,6 +88,15 @@ export interface CowAuctionSnapshot {
   prices: Map<string, bigint>;
   /** the orders the winner actually settled, with executed amounts */
   settled: Array<{ uid: string; sellAmount: bigint; buyAmount: bigint; buyToken: string; sellToken: string }>;
+  /** Every proposal made for each order, across all solutions.
+   *
+   *  A solution's `score` covers its whole bundle, so comparing our single-order
+   *  bid against it is not like for like — a solver bundling five orders will
+   *  out-score us on volume alone while possibly offering that user less. What
+   *  each solution *does* report per order is the buyAmount it would deliver,
+   *  and that is directly comparable: scored against the same limit and the same
+   *  auction price, it is what a rival offered on the order we bid on. */
+  proposalsByOrder: Map<string, Array<{ solver: string; buyAmount: bigint; isWinner: boolean }>>;
 }
 
 export function parseAuctionSnapshot(raw: RawCompetition): CowAuctionSnapshot | null {
@@ -101,10 +110,25 @@ export function parseAuctionSnapshot(raw: RawCompetition): CowAuctionSnapshot | 
       // a price we cannot parse is simply a token we cannot score
     }
   }
+  const proposalsByOrder = new Map<string, Array<{ solver: string; buyAmount: bigint; isWinner: boolean }>>();
+  for (const sol of raw.solutions ?? []) {
+    for (const o of sol.orders ?? []) {
+      if (!o.id || !o.buyAmount) continue;
+      const list = proposalsByOrder.get(o.id) ?? [];
+      list.push({
+        solver: (sol.solverAddress ?? '').toLowerCase(),
+        buyAmount: BigInt(o.buyAmount),
+        isWinner: sol.isWinner === true,
+      });
+      proposalsByOrder.set(o.id, list);
+    }
+  }
+
   return {
     competition: parsed.competition,
     orderUids: raw.auction?.orders ?? [],
     prices,
+    proposalsByOrder,
     settled: parsed.trades.map((t) => ({
       uid: t.orderUid,
       sellAmount: t.sellAmount,
