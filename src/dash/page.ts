@@ -386,7 +386,7 @@ const SUBTITLES = {
     + 'signed or traded.',
   'cow-solver': 'Simulating what it would take to be a CoW Swap solver. While an order is still open and the '
     + 'winner is unknown, every venue is quoted and the best becomes our bid. When the auction resolves we compare '
-    + 'our score with the winning solver\'s — then quote the venues again, to see whether the price we bid on was '
+    + 'our score with the winning solver’s — then quote the venues again, to see whether the price we bid on was '
     + 'still there once we knew we had to honour it. We never submit a solution, so every win here is '
     + 'counterfactual: our presence would have changed what rivals bid.',
 };
