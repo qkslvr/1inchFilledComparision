@@ -135,14 +135,26 @@ export function tradesFromCompetition(
  *  in a Trade log. Looking the auction up by its settlement hash recovers the
  *  solver scores for exactly those, which is the difference between a row that
  *  can answer "would we have won" and one that cannot. */
+const byTxCache = new Map<string, CowCompetition | null>();
+
 export async function fetchCompetitionByTx(txHash: string): Promise<CowCompetition | null> {
+  // One settlement can carry several trades, and each was firing its own
+  // identical lookup — a burst per block, which is the shape most likely to
+  // have earned the 429s.
+  const hit = byTxCache.get(txHash);
+  if (hit !== undefined) return hit;
   try {
     const res = await fetch(`${BY_TX}/${txHash}`, {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(15_000),
     });
+    // Do not cache a rate-limited miss: it says nothing about the auction and
+    // would make one unlucky moment permanent for that settlement.
     if (!res.ok) return null;
-    return tradesFromCompetition((await res.json()) as RawCompetition)?.competition ?? null;
+    const comp = tradesFromCompetition((await res.json()) as RawCompetition)?.competition ?? null;
+    if (byTxCache.size > 500) byTxCache.clear();
+    byTxCache.set(txHash, comp);
+    return comp;
   } catch (err) {
     logError(`cow competition lookup failed for ${txHash.slice(0, 12)}`, err);
     return null;
@@ -158,6 +170,8 @@ export class CompetitionFeed {
   private timer: NodeJS.Timeout | null = null;
   private inFlight = false;
   private stopped = false;
+  /** Set when the API pushes back; polling resumes after it. */
+  private backoffUntilMs = 0;
 
   constructor(private readonly onTrade: (t: CowTrade, c: CowCompetition) => void) {}
 
@@ -173,13 +187,18 @@ export class CompetitionFeed {
   }
 
   private async poll(): Promise<void> {
-    if (this.inFlight || this.stopped) return;
+    if (this.inFlight || this.stopped || Date.now() < this.backoffUntilMs) return;
     this.inFlight = true;
     try {
       const res = await fetch(LATEST, {
         headers: { Accept: 'application/json' },
         signal: AbortSignal.timeout(20_000),
       });
+      if (res.status === 429) {
+        // Sit out a whole advance cycle rather than retrying into the wall.
+        this.backoffUntilMs = Date.now() + config.cow.rateLimitBackoffMs;
+        throw new Error('HTTP 429');
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const parsed = tradesFromCompetition((await res.json()) as RawCompetition);
       if (!parsed) return;

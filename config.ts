@@ -361,10 +361,16 @@ export const config = {
     confirmations: 1,
     /** cap on blocks per getLogs call, so a long outage backfills gradually */
     maxBlockSpan: 200,
-    /** How often to read the public solver-competition feed. It advances about
-     *  once per block, so polling faster than a block only costs requests; this
-     *  is comfortably inside a block time without hammering it. */
-    competitionPollMs: 3_000,
+    /** How often to read the public solver-competition feed.
+     *
+     *  Measured: it advances every ~13s (min 5s). At 3s, four of every five
+     *  polls returned an auction we had already seen — and the payload is ~1 MB,
+     *  so that was 28 GB/day for nothing, which is the likeliest reason CoW
+     *  started answering 429. Six seconds still comfortably beats the minimum
+     *  observed advance. */
+    competitionPollMs: 6_000,
+    /** How long to stop polling after a 429, rather than retrying into it. */
+    rateLimitBackoffMs: 30_000,
   },
   pancake: {
     /** our assumed markup on a PancakeSwap-hedged fill, same basis as the others */
