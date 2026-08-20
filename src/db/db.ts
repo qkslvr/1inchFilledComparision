@@ -713,12 +713,13 @@ export class Db {
     bidOut: bigint | null,
     requoteOut: bigint | null,
     held: boolean | null,
-    slippageBps: number | null
+    slippageBps: number | null,
+    won: boolean
   ): void {
     this.enqueue(
-      `INSERT INTO quote_holds (order_hash, venue, delay_ms, checked_at_ms, bid_out, requote_out, held, slippage_bps)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (order_hash, venue, delay_ms) DO NOTHING`,
-      [orderHash, venue, delayMs, checkedAtMs, s(bidOut), s(requoteOut), held === null ? null : held ? 1 : 0, slippageBps]
+      `INSERT INTO quote_holds (order_hash, venue, delay_ms, checked_at_ms, bid_out, requote_out, held, slippage_bps, won)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (order_hash, venue, delay_ms) DO NOTHING`,
+      [orderHash, venue, delayMs, checkedAtMs, s(bidOut), s(requoteOut), held === null ? null : held ? 1 : 0, slippageBps, won ? 1 : 0]
     );
   }
 

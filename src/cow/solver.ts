@@ -85,6 +85,24 @@ for (const m of marketSamplers.values()) m.sampler.setActive(true);
 const wethFor = (a: string) => (a.toLowerCase() === NATIVE_SENTINEL ? config.wethAddress : a.toLowerCase());
 const STABLES = new Set(['USDC', 'USDT', 'DAI', 'BUSD']);
 
+/** Rough USD size of an order, from whichever leg is a dollar.
+ *
+ *  Reading only the buy side leaves every BUY_BASE order — where the user is
+ *  paid in ETH or WBTC — with no size at all, which is what made the column
+ *  empty. A stable on either side prices the trade just as well. */
+function sizeUsdOf(
+  order: CowSignedOrder,
+  pair: (typeof config.pairs)[number],
+  direction: 'SELL_BASE' | 'BUY_BASE'
+): number | null {
+  const buy = direction === 'SELL_BASE' ? pair.quote : pair.base;
+  const sell = direction === 'SELL_BASE' ? pair.base : pair.quote;
+  if (STABLES.has(buy.symbol)) return toFloat(rescale(order.buyAmount, buy.decimals, 6), 6);
+  if (STABLES.has(sell.symbol)) return toFloat(rescale(order.sellAmount, sell.decimals, 6), 6);
+  // Crypto-crypto, e.g. WBTC/ETH: no dollar leg, so no honest USD figure.
+  return null;
+}
+
 function weiToBuyToken(wei: bigint, buyDecimals: number, buySymbol: string): bigint | null {
   if (buySymbol === config.nativeSymbol) return wei;
   const mid = refPrices.latestMid.get(config.nativeTicker);
@@ -308,7 +326,7 @@ async function quoteRound(t: Tracked): Promise<void> {
 }
 
 /** t2: does the price we bid on survive now that we know we won? */
-async function checkHolds(t: Tracked, bidQuotes: Map<Venue, VenueQuote>): Promise<void> {
+async function checkHolds(t: Tracked, bidQuotes: Map<Venue, VenueQuote>, won: boolean): Promise<void> {
   for (const delay of config.cow.solverHoldDelaysMs) {
     if (delay > 0) await sleep(delay);
     const now = Date.now();
@@ -320,7 +338,7 @@ async function checkHolds(t: Tracked, bidQuotes: Map<Venue, VenueQuote>): Promis
       const held = re ? re.net >= bid.net : false;
       const slippage =
         re && bid.net > 0n ? Number(((bid.net - re.net) * 10_000n) / bid.net) : re ? null : null;
-      db.insertQuoteHold(t.order.uid, venue, delay, now, bid.net, re?.net ?? null, held, slippage);
+      db.insertQuoteHold(t.order.uid, venue, delay, now, bid.net, re?.net ?? null, held, slippage, won);
       holdChecks++;
     }
   }
@@ -370,9 +388,12 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
     db.upsertDecidedOutcome(buildDecidedOutcome(row, raw));
   }
 
-  // Only worth asking whether the price held if we would have had to honour it.
-  if (won && bidQuotes.size > 0) {
-    void checkHolds(t, bidQuotes).catch((err) => logError(`hold check ${t.order.uid.slice(0, 12)}`, err));
+  // Re-quote whether we won or lost. Losing bids are the control group: without
+  // them a hold rate cannot be read, because there is no way to tell adverse
+  // selection — our quote being stale is *why* we appeared to win — from the
+  // market simply having moved for everyone in that window.
+  if (bidQuotes.size > 0) {
+    void checkHolds(t, bidQuotes, won).catch((err) => logError(`hold check ${t.order.uid.slice(0, 12)}`, err));
   }
 }
 
@@ -442,7 +463,7 @@ async function consider(uid: string): Promise<void> {
     eligible: true,
     kyberOnly: false,
     skipReason: null,
-    sizeUsd: null,
+    sizeUsd: sizeUsdOf(order, match.pair, match.direction),
     auctionStartMs: null,
     auctionDurationS: null,
     initialRateBump: null,

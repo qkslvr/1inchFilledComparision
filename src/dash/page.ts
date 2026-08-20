@@ -195,6 +195,7 @@ function solverCard(v) {
     + '<div class="big ' + cls + '">' + pct(v.winRatePct) + '</div>'
     + '<div class="sub">would have won ' + v.wins + ' of ' + v.bids + ' bids</div>'
     + '<div class="rowk"><span>quote held</span><b>' + pct(v.heldPct) + '</b></div>'
+    + '<div class="rowk"><span>held when we lost</span><b>' + pct(v.heldPctLost) + '</b></div>'
     + '<div class="rowk"><span>median margin</span><b>' + bps(v.medianMarginBps) + '</b></div>'
     + '<div class="rowk"><span>median slippage</span><b>' + bps(v.medianSlippageBps) + '</b></div>'
     // Winning an auction you cannot honour is not a win, so the two rates are

@@ -405,9 +405,9 @@ async function collectSolver(db: Db) {
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY score_margin_bps) AS median_margin_bps
             FROM orders WHERE resolved_at_ms IS NOT NULL AND our_best_venue IS NOT NULL
             GROUP BY 1`),
-    db.all(`SELECT venue, delay_ms, count(*) AS checks, sum(held) AS held,
+    db.all(`SELECT venue, delay_ms, won, count(*) AS checks, sum(held) AS held,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY slippage_bps) AS median_slippage_bps
-            FROM quote_holds GROUP BY 1, 2`),
+            FROM quote_holds GROUP BY 1, 2, 3`),
     db.all(`SELECT o.order_hash, o.pair, o.resolved_at_ms, o.won, o.score_margin_bps,
                    o.our_best_venue, o.our_score, o.cow_winner_score, o.cow_reference_score,
                    o.cow_solver_count, o.size_usd, o.bid_at_ms,
@@ -422,13 +422,24 @@ async function collectSolver(db: Db) {
             FROM orders`),
   ]);
 
+  // Won and lost arms kept apart. If the quote holds far less often on the
+  // auctions we won, that is adverse selection — we won *because* our price was
+  // stale — and a blended rate would hide exactly that.
   const holdsByVenue = new Map<string, { checks: number; held: number; slip: number | null }>();
+  const lostByVenue = new Map<string, { checks: number; held: number }>();
   for (const h of holdRows) {
-    const cur = holdsByVenue.get(h.venue) ?? { checks: 0, held: 0, slip: null };
-    cur.checks += Number(h.checks);
-    cur.held += Number(h.held ?? 0);
-    if (h.median_slippage_bps !== null) cur.slip = Number(h.median_slippage_bps);
-    holdsByVenue.set(h.venue, cur);
+    if (h.won === 1) {
+      const cur = holdsByVenue.get(h.venue) ?? { checks: 0, held: 0, slip: null };
+      cur.checks += Number(h.checks);
+      cur.held += Number(h.held ?? 0);
+      if (h.median_slippage_bps !== null) cur.slip = Number(h.median_slippage_bps);
+      holdsByVenue.set(h.venue, cur);
+    } else {
+      const cur = lostByVenue.get(h.venue) ?? { checks: 0, held: 0 };
+      cur.checks += Number(h.checks);
+      cur.held += Number(h.held ?? 0);
+      lostByVenue.set(h.venue, cur);
+    }
   }
 
   const venues = ['kalqix', 'kyber', 'bebop'].map((venue) => {
@@ -448,6 +459,11 @@ async function collectSolver(db: Db) {
       heldPct: h && h.checks > 0 ? (100 * h.held) / h.checks : null,
       medianMarginBps: v?.median_margin_bps === null || v?.median_margin_bps === undefined ? null : Number(v.median_margin_bps),
       medianSlippageBps: h?.slip ?? null,
+      // The control arm: same re-quote, on auctions we did not win.
+      heldPctLost:
+        lostByVenue.get(venue) && lostByVenue.get(venue)!.checks > 0
+          ? (100 * lostByVenue.get(venue)!.held) / lostByVenue.get(venue)!.checks
+          : null,
     };
   });
 

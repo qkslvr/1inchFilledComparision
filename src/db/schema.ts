@@ -76,6 +76,7 @@ export const MIGRATIONS: string[] = [
      slippage_bps  DOUBLE PRECISION,
      PRIMARY KEY (order_hash, venue, delay_ms)
    )`,
+  `ALTER TABLE quote_holds ADD COLUMN IF NOT EXISTS won SMALLINT`,
   `CREATE INDEX IF NOT EXISTS idx_holds_checked ON quote_holds(checked_at_ms DESC)`,
 ];
 
@@ -176,6 +177,9 @@ CREATE TABLE IF NOT EXISTS quote_holds (
   requote_out   TEXT,
   held          SMALLINT,
   slippage_bps  DOUBLE PRECISION,
+  -- which arm: a hold rate on won auctions means nothing without the losing
+  -- ones to compare it against
+  won           SMALLINT,
   PRIMARY KEY (order_hash, venue, delay_ms)
 );
 CREATE INDEX IF NOT EXISTS idx_orders_open ON orders(deadline_ms) WHERE terminal_status IS NULL;
