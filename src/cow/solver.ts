@@ -377,8 +377,13 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
   }
 
   const won = wouldHaveWon(ourScore, bestRivalScore);
+  // A zero score means our best venue could not clear the user's limit at all.
+  // Expressed as a margin that is exactly -10000 bps, and feeding that into a
+  // median drags it to the floor — the card read -10000.0 bps off three such
+  // rows. No bid means no margin.
+  const hadBid = ourScore !== null && ourScore > 0n;
   const margin =
-    ourScore !== null && bestRivalScore !== null ? scoreMarginBps(ourScore, bestRivalScore) : null;
+    hadBid && bestRivalScore !== null ? scoreMarginBps(ourScore!, bestRivalScore) : null;
   db.recordResolution(t.order.uid, now, won, margin, bestRivalScore, bestRivalSolver, proposals.length);
   db.setTerminal(t.order.uid, 'filled', null, t.order.sellAmount, settledBuyAmount);
   await db.all(`UPDATE orders SET terminal_at_ms = ? WHERE order_hash = ?`, [now, t.order.uid]);

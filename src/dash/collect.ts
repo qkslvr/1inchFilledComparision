@@ -400,8 +400,13 @@ async function dbFor(chain: { chainId: number; schemaOverride?: string | null })
  *  not a loss, and counting it as one would understate every venue. */
 async function collectSolver(db: Db) {
   const [venueRows, holdRows, rows, coverage] = await Promise.all([
-    db.all(`SELECT our_best_venue AS venue, count(*) AS bids,
-                   sum(won) AS wins,
+    // A row whose score was zero never carried a bid, so it is neither a win
+    // nor a loss and has no margin. Counting it as a bid understates every
+    // win rate; letting its -10000 bps into the median destroys it.
+    db.all(`SELECT our_best_venue AS venue,
+                   count(*) FILTER (WHERE our_score <> '0') AS bids,
+                   sum(won) FILTER (WHERE our_score <> '0') AS wins,
+                   count(*) FILTER (WHERE our_score = '0') AS no_bid,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY score_margin_bps) AS median_margin_bps
             FROM orders WHERE resolved_at_ms IS NOT NULL AND our_best_venue IS NOT NULL
             GROUP BY 1`),
@@ -452,6 +457,7 @@ async function collectSolver(db: Db) {
       name: venue === 'kalqix' ? 'KalqiX' : venue === 'kyber' ? 'Kyber' : 'Bebop',
       bids,
       wins,
+      noBid: Number(v?.no_bid ?? 0),
       // Null rather than 0% when nothing has been bid: an untested venue and a
       // venue that never wins must not look the same.
       winRatePct: bids > 0 ? (100 * wins) / bids : null,
