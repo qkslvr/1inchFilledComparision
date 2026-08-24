@@ -107,6 +107,10 @@ function tokenLabel(address: string): string {
 
 /** Rough USD size of an order, from whichever leg is a dollar.
  *
+ *  Only works for a configured pair, which since the pair filter was dropped is
+ *  a small minority — 10 of 171 orders had a size. `sizeUsdFromQuote` covers
+ *  the rest.
+ *
  *  Reading only the buy side leaves every BUY_BASE order — where the user is
  *  paid in ETH or WBTC — with no size at all, which is what made the column
  *  empty. A stable on either side prices the trade just as well. */
@@ -121,6 +125,15 @@ function sizeUsdOf(
   if (STABLES.has(sell.symbol)) return toFloat(rescale(order.sellAmount, sell.decimals, 6), 6);
   // Crypto-crypto, e.g. WBTC/ETH: no dollar leg, so no honest USD figure.
   return null;
+}
+
+/** USD size for a token we have no pair config for.
+ *
+ *  Kyber already values its own output in dollars, so the trade's size comes
+ *  free with a quote we were making anyway — no extra request, no price feed. */
+function sizeUsdFromQuote(quotes: Map<Venue, VenueQuote>): number | null {
+  const usd6 = quotes.get('kyber')?.outUsd6;
+  return usd6 === null || usd6 === undefined || usd6 <= 0n ? null : toFloat(usd6, 6);
 }
 
 function weiToToken(wei: bigint, decimals: number, symbol: string): bigint | null {
@@ -652,7 +665,7 @@ async function consider(uid: string): Promise<void> {
     eligible: true,
     kyberOnly: false,
     skipReason: null,
-    sizeUsd: match ? sizeUsdOf(order, match.pair, match.direction) : null,
+    sizeUsd: (match ? sizeUsdOf(order, match.pair, match.direction) : null) ?? sizeUsdFromQuote(quotes),
     auctionStartMs: null,
     auctionDurationS: null,
     initialRateBump: null,
