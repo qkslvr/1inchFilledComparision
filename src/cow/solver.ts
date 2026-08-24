@@ -32,6 +32,7 @@ import { walkBuyBase, walkSellBase } from '../kalqix/book.js';
 import { parseAuctionSnapshot, type CowAuctionSnapshot } from './competition.js';
 import { fetchSignedOrder, type CowSignedOrder } from './orders.js';
 import { scoreOf, scoreOfBuy, scoreMarginBps, notionalNative, wouldHaveWon } from './score.js';
+import { tokenDecimals, weiToTokenViaUsd } from './tokens.js';
 import { bpsOfCeil, ppmOfCeil, quoteForBaseCeil, rescale, toFloat } from '../pricing/units.js';
 import { buildDecidedOutcome, OUTCOME_ORDER_SQL, OUTCOME_TICK_SQL } from '../report/outcome.js';
 import { log, logError } from '../log.js';
@@ -85,6 +86,17 @@ for (const m of marketSamplers.values()) m.sampler.setActive(true);
 const wethFor = (a: string) => (a.toLowerCase() === NATIVE_SENTINEL ? config.wethAddress : a.toLowerCase());
 const STABLES = new Set(['USDC', 'USDT', 'DAI', 'BUSD']);
 
+/** Short label for a token we have no pair config for. */
+function tokenLabel(address: string): string {
+  const a = address.toLowerCase();
+  for (const pair of config.pairs) {
+    for (const side of [pair.base, pair.quote]) {
+      if (side.addresses.some((x) => x.toLowerCase() === a)) return side.symbol;
+    }
+  }
+  return a.slice(0, 6) + '\u2026';
+}
+
 /** Rough USD size of an order, from whichever leg is a dollar.
  *
  *  Reading only the buy side leaves every BUY_BASE order — where the user is
@@ -125,6 +137,9 @@ interface VenueQuote {
    *  a sell order in buyToken, and converting early loses that choice. */
   gasWei: bigint;
   feeBps: bigint;
+  /** the venue's own USD valuation of `out`, 6dp, where it offers one. It is
+   *  the only price available for a token outside our pair config. */
+  outUsd6: bigint | null;
 }
 
 /** Ask every venue what it would pay, and net off what filling would cost us.
@@ -132,23 +147,26 @@ interface VenueQuote {
  *  Deliberately the same cost model as the other datasets — settlement gas, the
  *  venue's own swap leg, our markup and a safety margin — so a number here is
  *  comparable with a number there. */
-async function quoteVenues(
-  order: CowSignedOrder,
-  pair: (typeof config.pairs)[number],
-  direction: 'SELL_BASE' | 'BUY_BASE'
-): Promise<Map<Venue, VenueQuote>> {
+async function quoteVenues(t: {
+  order: CowSignedOrder;
+  pair: (typeof config.pairs)[number] | null;
+  direction: 'SELL_BASE' | 'BUY_BASE' | null;
+  buyDecimals: number;
+  sellDecimals: number;
+}): Promise<Map<Venue, VenueQuote>> {
+  const { order, pair, direction, buyDecimals } = t;
   const out = new Map<Venue, VenueQuote>();
-  const buyDecimals = direction === 'SELL_BASE' ? pair.quote.decimals : pair.base.decimals;
-  const buySymbol = direction === 'SELL_BASE' ? pair.quote.symbol : pair.base.symbol;
+  const buySymbol =
+    pair && direction ? (direction === 'SELL_BASE' ? pair.quote.symbol : pair.base.symbol) : '';
   const gasNow = gas.latest;
   const gasPriceWei = gasNow?.gasPriceWei ?? 0n;
   const fillGas = weiToToken(config.gasUnits * gasPriceWei, buyDecimals, buySymbol) ?? 0n;
   const safety = bpsOfCeil(order.buyAmount, config.safetyMarginBps);
 
-  // --- KalqiX ---
-  const market = pair.kalqix ? marketSamplers.get(pair.kalqix.ticker) ?? null : null;
+  // --- KalqiX --- only where we have a book for the pair
+  const market = pair?.kalqix ? marketSamplers.get(pair.kalqix.ticker) ?? null : null;
   const snap = market?.sampler.latest ?? null;
-  if (snap && pair.kalqix) {
+  if (snap && pair?.kalqix && direction) {
     const book = rescaleBookDecimals(
       snap.book,
       market!.baseDecimals,
@@ -169,6 +187,7 @@ async function quoteVenues(
         fee,
         gasWei: config.gasUnits * gasPriceWei,
         feeBps: config.kalqixTakerFeeBps,
+        outUsd6: null,
       });
     }
   }
@@ -178,16 +197,26 @@ async function quoteVenues(
     const q = await fetchKyberQuote(order.sellToken, order.buyToken, order.sellAmount, {
       retries: config.kyber.quoteRetries,
     });
-    const venueGas = weiToToken(q.gasUnits * gasPriceWei, buyDecimals, buySymbol);
+    // For a configured pair we can price gas through the reference book; for an
+    // arbitrary token the quote's own USD figure is the only rate to hand, and
+    // it is right there in the response.
+    const venueGas =
+      weiToToken(q.gasUnits * gasPriceWei, buyDecimals, buySymbol) ??
+      weiToTokenViaUsd(q.gasUnits * gasPriceWei, refPrices.latestMid.get(config.nativeTicker)?.mid, q.amountOut, q.amountOutUsd6);
+    const fillGasHere =
+      fillGas ||
+      weiToTokenViaUsd(config.gasUnits * gasPriceWei, refPrices.latestMid.get(config.nativeTicker)?.mid, q.amountOut, q.amountOutUsd6) ||
+      0n;
     if (venueGas !== null) {
       const fee = bpsOfCeil(q.amountOut, config.kyber.feeBps);
       out.set('kyber', {
         out: q.amountOut,
-        net: q.amountOut - fillGas - venueGas - fee - safety,
-        gasCost: fillGas + venueGas,
+        net: q.amountOut - fillGasHere - venueGas - fee - safety,
+        gasCost: fillGasHere + venueGas,
         fee,
         gasWei: (config.gasUnits + q.gasUnits) * gasPriceWei,
         feeBps: config.kyber.feeBps,
+        outUsd6: q.amountOutUsd6,
       });
     }
   } catch (err) {
@@ -198,8 +227,7 @@ async function quoteVenues(
   if (bebop.enabled) {
     const found = bebop.bookFor(order.sellToken, order.buyToken);
     if (found) {
-      const sellDecimals = direction === 'SELL_BASE' ? pair.base.decimals : pair.quote.decimals;
-      const human = toFloat(order.sellAmount, sellDecimals);
+      const human = toFloat(order.sellAmount, t.sellDecimals);
       const raw = found.aIsBase
         ? walkSellBaseFloat(found.book.bids, human)
         : walkBuyBaseFloat(found.book.asks, human);
@@ -217,6 +245,7 @@ async function quoteVenues(
             fee,
             gasWei: (config.gasUnits + config.bebop.gasUnits) * gasPriceWei,
             feeBps: config.bebop.feeBps,
+            outUsd6: null,
           });
         }
       }
@@ -227,8 +256,12 @@ async function quoteVenues(
 
 interface Tracked {
   order: CowSignedOrder;
-  pair: (typeof config.pairs)[number];
-  direction: 'SELL_BASE' | 'BUY_BASE';
+  /** Present only when the pair is one we have a KalqiX book for. Everything
+   *  else is priced from Kyber and Bebop, which quote by address. */
+  pair: (typeof config.pairs)[number] | null;
+  direction: 'SELL_BASE' | 'BUY_BASE' | null;
+  sellDecimals: number;
+  buyDecimals: number;
   registered: boolean;
   quoteRounds: number;
   /** the last pre-resolution quote per venue — this is what we bid */
@@ -253,7 +286,7 @@ let holdChecks = 0;
 let evicted = 0;
 /** Why candidates were turned away. Without this the tracker reporting zero is
  *  indistinguishable from the feed being empty, which cost an afternoon. */
-const rejected = { lookup: 0, notOpen: 0, expired: 0, noPair: 0, noQuote: 0, tooFar: 0, newUids: 0, buyKind: 0 };
+const rejected = { lookup: 0, notOpen: 0, expired: 0, noDecimals: 0, noQuote: 0, tooFar: 0, newUids: 0 };
 
 /** What our bid is worth, in native wei, for either kind of order.
  *
@@ -267,10 +300,6 @@ const rejected = { lookup: 0, notOpen: 0, expired: 0, noPair: 0, noQuote: 0, too
  *        under-states our surplus, which is the safe direction to be wrong in.
  */
 function bidScore(t: Tracked, q: VenueQuote, prices: Map<string, bigint>): bigint | null {
-  const pair = t.pair;
-  const buy = t.direction === 'SELL_BASE' ? pair.quote : pair.base;
-  const sell = t.direction === 'SELL_BASE' ? pair.base : pair.quote;
-
   if (t.order.kind === 'sell') {
     return scoreOf({
       ourBuyAmount: q.net,
@@ -281,7 +310,15 @@ function bidScore(t: Tracked, q: VenueQuote, prices: Map<string, bigint>): bigin
 
   if (q.out <= 0n) return null;
   const requiredIn = (t.order.sellAmount * t.order.buyAmount + q.out - 1n) / q.out;
-  const gasInSell = weiToToken(q.gasWei, sell.decimals, sell.symbol);
+  // Gas in the token being spent. Without a configured pair we have no symbol to
+  // recognise, so fall back to the quote's own dollar rate on the output and
+  // convert across at the order's own implied price.
+  const gasInSell =
+    weiToTokenViaUsd(q.gasWei, refPrices.latestMid.get(config.nativeTicker)?.mid, q.out, q.outUsd6) === null
+      ? null
+      : ((weiToTokenViaUsd(q.gasWei, refPrices.latestMid.get(config.nativeTicker)?.mid, q.out, q.outUsd6) as bigint) *
+          t.order.sellAmount) /
+        (q.out === 0n ? 1n : q.out);
   if (gasInSell === null) return null;
   const fee = bpsOfCeil(requiredIn, q.feeBps);
   const safety = bpsOfCeil(t.order.sellAmount, config.safetyMarginBps);
@@ -290,6 +327,23 @@ function bidScore(t: Tracked, q: VenueQuote, prices: Map<string, bigint>): bigin
     limitSellAmount: t.order.sellAmount,
     sellTokenPrice: prices.get(t.order.sellToken),
   });
+}
+
+/** How far below the user's limit our best price sits, in bps, for either kind.
+ *
+ *  Positive means short. On a SELL order that is the buyToken we fail to
+ *  deliver; on a BUY order it is the extra sellToken we would need to spend.
+ *  Used only to decide whether an order is close enough to be worth tracking —
+ *  most of the solvable set is resting far from market. */
+function shortfallBps(t: Tracked, q: VenueQuote): number | null {
+  if (t.order.kind === 'sell') {
+    if (t.order.buyAmount <= 0n) return null;
+    return Number(((t.order.buyAmount - q.net) * 10_000n) / t.order.buyAmount);
+  }
+  if (q.out <= 0n || t.order.sellAmount <= 0n) return null;
+  const requiredIn = (t.order.sellAmount * t.order.buyAmount + q.out - 1n) / q.out;
+  const spend = requiredIn + bpsOfCeil(requiredIn, q.feeBps) + bpsOfCeil(t.order.sellAmount, config.safetyMarginBps);
+  return Number(((spend - t.order.sellAmount) * 10_000n) / t.order.sellAmount);
 }
 
 /** What a rival's proposal is worth on this order, same units, same rules. */
@@ -317,19 +371,20 @@ function rivalScore(
  *  the quotes that preceded it, and the hold check compares against whichever
  *  round happened to be last before the auction closed. */
 async function quoteRound(t: Tracked): Promise<void> {
-  const quotes = await quoteVenues(t.order, t.pair, t.direction);
+  const quotes = await quoteVenues(t);
   const now = Date.now();
   t.lastQuotes = quotes;
   t.lastQuoteAtMs = now;
   t.quoteRounds++;
 
-  const buyDecimals = t.direction === 'SELL_BASE' ? t.pair.quote.decimals : t.pair.base.decimals;
-  const buySymbol = t.direction === 'SELL_BASE' ? t.pair.quote.symbol : t.pair.base.symbol;
+  const buyDecimals = t.buyDecimals;
+  const buySymbol =
+    t.pair && t.direction ? (t.direction === 'SELL_BASE' ? t.pair.quote.symbol : t.pair.base.symbol) : '';
   const gasNow = gas.latest;
   const k = quotes.get('kalqix');
   const ky = quotes.get('kyber');
   const bb = quotes.get('bebop');
-  const marketSnap = t.pair.kalqix ? marketSamplers.get(t.pair.kalqix.ticker)?.sampler.latest ?? null : null;
+  const marketSnap = t.pair?.kalqix ? marketSamplers.get(t.pair.kalqix.ticker)?.sampler.latest ?? null : null;
 
   const tick: TickInsert = {
     orderHash: t.order.uid,
@@ -340,7 +395,7 @@ async function quoteRound(t: Tracked): Promise<void> {
     exclusive: false,
     remainingMaker: t.order.sellAmount,
     rateBump: null,
-    insufficientDepth: !!t.pair.kalqix && marketSnap !== null && k === undefined,
+    insufficientDepth: !!t.pair?.kalqix && marketSnap !== null && k === undefined,
     hedgeProceeds: k?.out ?? null,
     // The limit is what a rival must beat, so it takes auctionCost's place.
     auctionCost: t.order.buyAmount,
@@ -397,7 +452,7 @@ async function checkHolds(t: Tracked, bidQuotes: Map<Venue, VenueQuote>, won: bo
   for (const delay of config.cow.solverHoldDelaysMs) {
     if (delay > 0) await sleep(delay);
     const now = Date.now();
-    const requotes = await quoteVenues(t.order, t.pair, t.direction);
+    const requotes = await quoteVenues(t);
     for (const [venue, bid] of bidQuotes) {
       const re = requotes.get(venue);
       // A venue that has gone away is not slippage; it is a fill we could not
@@ -515,9 +570,16 @@ async function consider(uid: string): Promise<void> {
     rejected.expired++;
     return;
   }
+  // A configured pair is a bonus, not a requirement: it unlocks the KalqiX book.
+  // Kyber and Bebop quote by address, so everything else is still priceable, and
+  // insisting on a pair was rejecting the large majority of CoW's flow.
   const match = pairForTokens(wethFor(order.sellToken), wethFor(order.buyToken));
-  if (!match) {
-    rejected.noPair++;
+  const sellDecimals = await tokenDecimals(order.sellToken, (a) => bebop.decimalsFor(a));
+  const buyDecimals = await tokenDecimals(order.buyToken, (a) => bebop.decimalsFor(a));
+  if (sellDecimals === null || buyDecimals === null) {
+    // Without decimals every amount is meaningless, so this is the one case we
+    // genuinely cannot price.
+    rejected.noDecimals++;
     return;
   }
   // Most of the solvable set is long-dated limit orders resting far from market.
@@ -525,25 +587,28 @@ async function consider(uid: string): Promise<void> {
   // be within reach of a price we can actually source before we track it.
   const t: Tracked = {
     order,
-    pair: match.pair,
-    direction: match.direction,
+    pair: match ? match.pair : null,
+    direction: match ? match.direction : null,
+    sellDecimals,
+    buyDecimals,
     registered: false,
     quoteRounds: 0,
     lastQuotes: new Map(),
     lastQuoteAtMs: 0,
     discoveredAtMs: Date.now(),
   };
-  const quotes = await quoteVenues(order, match.pair, match.direction);
-  let best: VenueQuote | null = null;
-  for (const q of quotes.values()) if (!best || q.net > best.net) best = q;
-  if (!best) {
+  const quotes = await quoteVenues(t);
+  if (quotes.size === 0) {
     rejected.noQuote++;
     return;
   }
-  const distanceBps = Number(((order.buyAmount - best.net) * 10_000n) / order.buyAmount);
-  if (distanceBps > Number(config.cow.solverMaxDistanceBps)) {
+  let distanceBps: number | null = null;
+  for (const q of quotes.values()) {
+    const d = shortfallBps(t, q);
+    if (d !== null && (distanceBps === null || d < distanceBps)) distanceBps = d;
+  }
+  if (distanceBps === null || distanceBps > Number(config.cow.solverMaxDistanceBps)) {
     rejected.tooFar++;
-    log(`skip ${uid.slice(0, 12)} ${match.pair.ticker}: ${distanceBps} bps from our best price`);
     return;
   }
 
@@ -559,13 +624,13 @@ async function consider(uid: string): Promise<void> {
     takingAmount: order.buyAmount,
     remainingMaker: order.sellAmount,
     makerAddress: order.owner,
-    pair: match.pair.ticker,
-    direction: match.direction,
+    pair: match ? match.pair.ticker : `${tokenLabel(order.sellToken)}/${tokenLabel(order.buyToken)}`,
+    direction: match ? match.direction : null,
     hedgeAssetKind: null,
     eligible: true,
     kyberOnly: false,
     skipReason: null,
-    sizeUsd: sizeUsdOf(order, match.pair, match.direction),
+    sizeUsd: match ? sizeUsdOf(order, match.pair, match.direction) : null,
     auctionStartMs: null,
     auctionDurationS: null,
     initialRateBump: null,
@@ -660,7 +725,7 @@ const status = setInterval(() => {
     `status: tracked=${tracked.size} discovered=${discovered} bids=${bidsPlaced} ` +
       `resolved=${resolvedCount} won=${wonCount} holdChecks=${holdChecks} evicted=${evicted} ` +
       `new=${rejected.newUids} rejected(lookup=${rejected.lookup} notOpen=${rejected.notOpen} ` +
-      `expired=${rejected.expired} noPair=${rejected.noPair} buyKind=${rejected.buyKind} noQuote=${rejected.noQuote} tooFar=${rejected.tooFar}) ` +
+      `expired=${rejected.expired} noDecimals=${rejected.noDecimals} noQuote=${rejected.noQuote} tooFar=${rejected.tooFar}) ` +
       `bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'} ` +
       (db.storagePressure ? ` STORAGE-PRESSURE(${db.droppedTicks} dropped)` : '')
   );
