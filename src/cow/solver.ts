@@ -31,7 +31,7 @@ import { walkBuyBaseFloat, walkSellBaseFloat } from '../bebop/depth.js';
 import { walkBuyBase, walkSellBase } from '../kalqix/book.js';
 import { parseAuctionSnapshot, type CowAuctionSnapshot } from './competition.js';
 import { fetchSignedOrder, type CowSignedOrder } from './orders.js';
-import { scoreOf, scoreMarginBps, wouldHaveWon } from './score.js';
+import { scoreOf, scoreMarginBps, notionalNative, wouldHaveWon } from './score.js';
 import { bpsOfCeil, ppmOfCeil, quoteForBaseCeil, rescale, toFloat } from '../pricing/units.js';
 import { buildDecidedOutcome, OUTCOME_ORDER_SQL, OUTCOME_TICK_SQL } from '../report/outcome.js';
 import { log, logError } from '../log.js';
@@ -335,9 +335,14 @@ async function checkHolds(t: Tracked, bidQuotes: Map<Venue, VenueQuote>, won: bo
       const re = requotes.get(venue);
       // A venue that has gone away is not slippage; it is a fill we could not
       // have made at all, so it counts as not held with no slippage figure.
-      const held = re ? re.net >= bid.net : false;
       const slippage =
-        re && bid.net > 0n ? Number(((bid.net - re.net) * 10_000n) / bid.net) : re ? null : null;
+        re && bid.net > 0n ? Number(((bid.net - re.net) * 10_000n) / bid.net) : null;
+      // "Held" means the fill would still have been good, not that the price was
+      // identical to the wei. Our bid already carries a safetyMarginBps cushion,
+      // so a shortfall inside it leaves us whole. Requiring an exact match
+      // reported 37 re-quotes as slipped whose slippage rounded to 0.0 bps,
+      // which is what made the column look broken.
+      const held = re !== undefined && slippage !== null && slippage <= Number(config.safetyMarginBps);
       db.insertQuoteHold(t.order.uid, venue, delay, now, bid.net, re?.net ?? null, held, slippage, won);
       holdChecks++;
     }
@@ -378,12 +383,14 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
 
   const won = wouldHaveWon(ourScore, bestRivalScore);
   // A zero score means our best venue could not clear the user's limit at all.
-  // Expressed as a margin that is exactly -10000 bps, and feeding that into a
-  // median drags it to the floor — the card read -10000.0 bps off three such
-  // rows. No bid means no margin.
+  // That is not a bid, so it has no margin — feeding it in as a floor value
+  // dragged the median onto it.
   const hadBid = ourScore !== null && ourScore > 0n;
+  const notional = notionalNative(t.order.buyAmount, price);
   const margin =
-    hadBid && bestRivalScore !== null ? scoreMarginBps(ourScore!, bestRivalScore) : null;
+    hadBid && bestRivalScore !== null && notional !== null
+      ? scoreMarginBps(ourScore!, bestRivalScore, notional)
+      : null;
   db.recordResolution(t.order.uid, now, won, margin, bestRivalScore, bestRivalSolver, proposals.length);
   db.setTerminal(t.order.uid, 'filled', null, t.order.sellAmount, settledBuyAmount);
   await db.all(`UPDATE orders SET terminal_at_ms = ? WHERE order_hash = ?`, [now, t.order.uid]);

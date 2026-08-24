@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { scoreOf, scoreMarginBps, wouldHaveWon } from '../src/cow/score.js';
+import { scoreOf, scoreMarginBps, notionalNative, wouldHaveWon } from '../src/cow/score.js';
 
 /** Live mainnet auction 13627568, captured from the public competition feed.
  *  The winner sold 43,250 sUSD against a limit of 42,794,727,884 USDT and
@@ -53,12 +53,29 @@ test('an unscoreable bid never counts as a win', () => {
   assert.equal(wouldHaveWon(100n, null), false);
 });
 
-test('margin is signed, in bps of the winner score', () => {
-  assert.equal(scoreMarginBps(11_000n, 10_000n), 1000); // 10% ahead
-  assert.equal(scoreMarginBps(9_000n, 10_000n), -1000); // 10% behind
-  assert.equal(scoreMarginBps(10_000n, 10_000n), 0);
+test('margin is signed, in bps of the trade value', () => {
+  const notional = 1_000_000n;
+  assert.equal(scoreMarginBps(11_000n, 10_000n, notional), 10); // 1000 wei of a 1e6 trade
+  assert.equal(scoreMarginBps(9_000n, 10_000n, notional), -10);
+  assert.equal(scoreMarginBps(10_000n, 10_000n, notional), 0);
 });
 
-test('a zero winner score yields no margin rather than a division blow-up', () => {
-  assert.equal(scoreMarginBps(10n, 0n), null);
+test('a rival scoring zero does not explode the margin', () => {
+  // This is the bug it replaces: against the rival's own score, a zero or
+  // near-zero denominator produced +6,185,770,007 bps on the dashboard.
+  // Against notional it stays a sane fraction of the trade.
+  const notional = 1_000_000n;
+  assert.equal(scoreMarginBps(5_000n, 0n, notional), 50);
+  // The real row that produced the absurd figure: now ~1% of the trade.
+  assert.equal(scoreMarginBps(253_667_451_959_248n, 410_081_593n, 25_366_745_195_924_800n), 99);
+});
+
+test('a zero notional yields no margin rather than a division blow-up', () => {
+  assert.equal(scoreMarginBps(10n, 0n, 0n), null);
+});
+
+test('notional in native is the trade value the margin is measured against', () => {
+  // 1e6 atoms priced at 1e18 (one native wei per atom) is 1e6 native wei.
+  assert.equal(notionalNative(1_000_000n, 10n ** 18n), 1_000_000n);
+  assert.equal(notionalNative(1_000_000n, undefined), null);
 });

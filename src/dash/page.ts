@@ -218,7 +218,12 @@ function solverSection(c) {
     + '</div>';
 
   h += '<h4>Bids — quoted before the winner was known, then re-quoted after</h4>';
-  h += '<p class="mut" style="font-size:12px;margin:0 0 4px">Margin is against the best price any rival offered on <em>this</em> order — not the winning solution\u2019s total, which covers its whole bundle. "rivals" counts solvers that bid on this order; "solvers" counts every solution in the batch.</p>';
+  h += '<p class="mut" style="font-size:12px;margin:0 0 8px;line-height:1.7">'
+    + '<b>margin</b> — how much more of the trade value we would have given the user than the best rival who bid on <em>this</em> order, in bps. Not against the winning solution\u2019s total, which covers its whole bundle.<br>'
+    + '<b>slippage</b> — how much worse our venue\u2019s price was when re-quoted after the result was known. <b>held</b> is yes when that move stayed inside the safety margin we had already priced in.<br>'
+    + '<b>quotes</b> — how many times we re-priced the order while it was open. <b>lead s</b> — seconds between our final bid and the auction resolving.<br>'
+    + '<b>rivals</b> — solvers who bid on this order, the field we were actually against. <b>solvers</b> — every solution in the batch, most of which ignored this order.'
+    + '</p>';
   h += '<div class="controls">'
     + '<input id="fq" placeholder="filter: pair, venue…" oninput="applyFilters()">'
     + '<select id="fv" onchange="applyFilters()"><option value="">all venues</option>'
@@ -266,6 +271,12 @@ function solverRow(o) {
     + '</tr>';
 }
 
+/** Filter and sort state lives here, not in the DOM.
+ *
+ *  refresh() replaces the whole section with innerHTML every 5 seconds, which
+ *  rebuilt the inputs empty and dropped whatever had been typed — the filters
+ *  appeared to do nothing because they were being wiped between keystrokes. */
+var filterState = { q: '', venue: '', result: '', held: '' };
 var sortState = { col: -1, dir: -1 };
 function sortSolver(col) {
   var tbl = document.getElementById('solvertbl');
@@ -293,10 +304,15 @@ function sortSolver(col) {
 }
 
 function applyFilters() {
-  var q = (document.getElementById('fq') || {}).value || '';
-  var v = (document.getElementById('fv') || {}).value || '';
-  var r = (document.getElementById('fr') || {}).value || '';
-  var hd = (document.getElementById('fh') || {}).value || '';
+  var fq = document.getElementById('fq'), fv = document.getElementById('fv');
+  var fr = document.getElementById('fr'), fh = document.getElementById('fh');
+  // Read from the DOM when the user just typed, and remember it so the next
+  // render can put it back.
+  if (fq) filterState.q = fq.value;
+  if (fv) filterState.venue = fv.value;
+  if (fr) filterState.result = fr.value;
+  if (fh) filterState.held = fh.value;
+  var q = filterState.q, v = filterState.venue, r = filterState.result, hd = filterState.held;
   var tbl = document.getElementById('solvertbl');
   if (!tbl) return;
   var rows = tbl.tBodies[0].rows, shown = 0;
@@ -312,6 +328,25 @@ function applyFilters() {
   }
   var c = document.getElementById('fcount');
   if (c) c.textContent = shown + ' of ' + rows.length + ' shown';
+}
+
+/** Put the remembered filters back into freshly rendered controls, then apply
+ *  them and re-sort. Called after every render. */
+function restoreFilters() {
+  var fq = document.getElementById('fq'), fv = document.getElementById('fv');
+  var fr = document.getElementById('fr'), fh = document.getElementById('fh');
+  if (!fq) return;
+  fq.value = filterState.q;
+  if (fv) fv.value = filterState.venue;
+  if (fr) fr.value = filterState.result;
+  if (fh) fh.value = filterState.held;
+  if (sortState.col >= 0) {
+    var col = sortState.col;
+    sortState.dir = -sortState.dir; // sortSolver flips it back
+    sortState.col = -1;
+    sortSolver(col);
+  }
+  applyFilters();
 }
 
 function chainSection(c, active) {
@@ -404,7 +439,7 @@ function setSubtitle() {
   const active = lastChains.find(c => c.key === activeChain) ?? lastChains[0];
   const el = document.getElementById('sub');
   if (el) el.textContent = SUBTITLES[active && active.orderSource ? active.orderSource : 'fusion'] || SUBTITLES.fusion;
-  if (active && active.orderSource === 'cow-solver') applyFilters();
+  if (active && active.orderSource === 'cow-solver') restoreFilters();
 }
 
 async function refresh() {
@@ -430,6 +465,7 @@ async function refresh() {
 
     const root = document.getElementById('root');
     root.innerHTML = d.chains.map(c => chainSection(c, c.key === activeChain)).join('');
+    restoreFilters();
     for (const key of openDrawers) {
       const det = document.querySelector('.chain[data-chain="' + key + '"] details');
       if (det) det.setAttribute('open', '');

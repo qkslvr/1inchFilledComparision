@@ -36,13 +36,29 @@ export function scoreOf({ ourBuyAmount, limitBuyAmount, buyTokenPrice }: ScoreIn
   return (surplus * buyTokenPrice) / PRICE_SCALE;
 }
 
-/** How far our score sat from the winner's, in bps of the winner's score.
+/** How far our bid sat from the best rival's, in bps **of the trade's value**.
  *
- *  Positive means we were ahead. Expressed against the winner rather than
- *  against notional so it reads on the same axis as the ranking itself. */
-export function scoreMarginBps(ourScore: bigint, winnerScore: bigint): number | null {
-  if (winnerScore <= 0n) return null;
-  return Number(((ourScore - winnerScore) * 10_000n) / winnerScore);
+ *  Expressing it against the rival's score — the obvious reading of "margin" —
+ *  is unusable, because a rival's surplus is frequently near zero: 60 of 189
+ *  rivals scored exactly 0 and another 26 scored under a tenth of ours. Dividing
+ *  by that produced +6,185,770,007 bps on the dashboard.
+ *
+ *  Against the notional it is bounded, comparable between orders, and means
+ *  something plain: how much more of the trade's value we would have handed the
+ *  user than the best rival did. */
+export function scoreMarginBps(
+  ourScore: bigint,
+  rivalScore: bigint,
+  notionalNative: bigint
+): number | null {
+  if (notionalNative <= 0n) return null;
+  return Number(((ourScore - rivalScore) * 10_000n) / notionalNative);
+}
+
+/** The order's value in native wei, which is what the margin is a fraction of. */
+export function notionalNative(limitBuyAmount: bigint, buyTokenPrice: bigint | undefined): bigint | null {
+  if (buyTokenPrice === undefined) return null;
+  return (limitBuyAmount * buyTokenPrice) / PRICE_SCALE;
 }
 
 /** Did our bid beat the winner's?
