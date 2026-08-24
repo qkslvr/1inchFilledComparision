@@ -26,7 +26,7 @@ import { GasPoller } from '../gas/poller.js';
 import { RefPriceLoop, Sampler, rescaleBookDecimals } from '../kalqix/sampler.js';
 import { chooseBookFetcher } from '../kalqix/client.js';
 import { fetchKyberQuote } from '../kyber/client.js';
-import { RequestBudget } from '../kyber/budget.js';
+import { kyberBudget, KyberBudgetExhausted } from '../kyber/client.js';
 import { createBebopSource } from '../bebop/source.js';
 import { walkBuyBaseFloat, walkSellBaseFloat } from '../bebop/depth.js';
 import { walkBuyBase, walkSellBase } from '../kalqix/book.js';
@@ -43,8 +43,8 @@ const LATEST = 'https://api.cow.fi/mainnet/api/v2/solver_competition/latest';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // KalqiX and Bebop are in-memory and free; only Kyber costs a request, so it is
-// the only thing that has to be rationed as the tracked count grows.
-const kyberBudget = new RequestBudget(config.cow.kyberBudgetPerWindow, config.cow.kyberBudgetWindowMs);
+// the only thing that has to be rationed as the tracked count grows. The bucket
+// lives in the client so retries are charged to it too.
 /** Last Kyber answer per order, so a round that loses the draw ages its quote
  *  instead of losing the venue entirely. */
 const lastKyber = new Map<string, { q: Awaited<ReturnType<typeof fetchKyberQuote>>; atMs: number }>();
@@ -203,12 +203,13 @@ async function quoteVenues(t: {
   // --- Kyber ---
   try {
     let q: Awaited<ReturnType<typeof fetchKyberQuote>> | null = null;
-    if (kyberBudget.take()) {
-      q = await fetchKyberQuote(order.sellToken, order.buyToken, order.sellAmount, {
-        retries: config.kyber.quoteRetries,
-      });
+    try {
+      // No retries here: with 60 orders competing for the budget, breadth is
+      // worth more than a second attempt at one of them.
+      q = await fetchKyberQuote(order.sellToken, order.buyToken, order.sellAmount, { retries: 0 });
       lastKyber.set(order.uid, { q, atMs: Date.now() });
-    } else {
+    } catch (err) {
+      if (!(err instanceof KyberBudgetExhausted)) throw err;
       const prev = lastKyber.get(order.uid);
       // Reuse only while it is plausibly still the price. Past that, no Kyber
       // column is honest; a stale one is not.
@@ -736,8 +737,14 @@ const auctionTimer = setInterval(() => {
 // Phase B: keep quoting everything open. This is what makes the bid a live
 // price rather than a stale one, and it is the behaviour being evaluated —
 // whether continuously polling is worth it is one of the questions.
+let quoteCursor = 0;
 const quoteTimer = setInterval(() => {
-  for (const t of [...tracked.values()]) {
+  // Rotate the starting point each round. Iterating insertion order meant the
+  // oldest tracked orders always reached Kyber first and the newest never did.
+  const all = [...tracked.values()];
+  quoteCursor = all.length === 0 ? 0 : (quoteCursor + 1) % all.length;
+  const ordered = all.slice(quoteCursor).concat(all.slice(0, quoteCursor));
+  for (const t of ordered) {
     void quoteRound(t).catch((err) => logError(`quote round ${t.order.uid.slice(0, 12)}`, err));
   }
 }, config.cow.solverQuoteIntervalMs);
@@ -748,7 +755,7 @@ const status = setInterval(() => {
       `resolved=${resolvedCount} won=${wonCount} holdChecks=${holdChecks} evicted=${evicted} ` +
       `new=${rejected.newUids} rejected(lookup=${rejected.lookup} notOpen=${rejected.notOpen} ` +
       `expired=${rejected.expired} noDecimals=${rejected.noDecimals} noQuote=${rejected.noQuote} tooFar=${rejected.tooFar}) ` +
-      `kyberBudget=${kyberBudget.available}/${config.cow.kyberBudgetPerWindow} (denied ${kyberBudget.denied}) ` +
+      `kyberBudget=${kyberBudget.available}/${config.kyber.budgetPerWindow} (denied ${kyberBudget.denied}) ` +
       `bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'} ` +
       (db.storagePressure ? ` STORAGE-PRESSURE(${db.droppedTicks} dropped)` : '')
   );

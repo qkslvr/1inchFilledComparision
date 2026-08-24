@@ -476,10 +476,6 @@ export const config = {
     solverMaxDistanceBps: 250n,
     /** Hard ceiling on orders quoted at once, whatever the filter admits. */
     solverMaxTracked: 60,
-    /** Kyber's own headers report 30 requests per 10s per IP. Staying under it
-     *  rather than at it, because every collector on this host shares the IP. */
-    kyberBudgetPerWindow: 24,
-    kyberBudgetWindowMs: 10_000,
     /** A Kyber quote older than this is dropped rather than reused, so a starved
      *  order reports no Kyber price instead of a stale one. */
     kyberQuoteMaxAgeMs: 30_000,
@@ -527,6 +523,10 @@ export const config = {
     /** retries for one-shot callers on a 429 or timeout; the Fusion loop passes
      *  none, because its next tick is 2s away. */
     quoteRetries: 2,
+    /** Requests per window, counted per HTTP call. Kyber's own headers report
+     *  30 per 10s per IP; staying under it because a retry spends budget too. */
+    budgetPerWindow: 25,
+    budgetWindowMs: 10_000,
     /** a tick using a quote older than this (or for a stale size) is kyber-degraded */
     degradedQuoteAgeMs: 5000,
     /** cap on concurrent per-order quote loops (rate-limit guard) */

@@ -1,4 +1,5 @@
 import { config } from '../../config.js';
+import { RequestBudget } from './budget.js';
 
 export class KyberRateLimitError extends Error {
   constructor() {
@@ -27,6 +28,19 @@ function parseUsd6(v: string | undefined): bigint | null {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Shared by every caller in this process, and counted per HTTP request rather
+ *  than per quote — a retry is another request as far as Kyber is concerned. */
+export const kyberBudget = new RequestBudget(
+  config.kyber.budgetPerWindow,
+  config.kyber.budgetWindowMs
+);
+
+export class KyberBudgetExhausted extends Error {
+  constructor() {
+    super('kyber budget exhausted');
+  }
+}
+
 /** GET /{chain}/api/v1/routes — quote only, never builds calldata. Amounts are
  *  base-unit decimal strings; native ETH sentinel is accepted directly.
  *
@@ -43,6 +57,7 @@ export async function fetchKyberQuote(
 ): Promise<KyberQuote> {
   const retries = opts.retries ?? 0;
   for (let attempt = 0; ; attempt++) {
+    if (!kyberBudget.take()) throw new KyberBudgetExhausted();
     try {
       return await quoteOnce(tokenIn, tokenOut, amountIn);
     } catch (err) {
