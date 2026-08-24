@@ -407,6 +407,12 @@ async function collectSolver(db: Db) {
                    count(*) FILTER (WHERE our_score <> '0') AS bids,
                    sum(won) FILTER (WHERE our_score <> '0') AS wins,
                    count(*) FILTER (WHERE our_score = '0') AS no_bid,
+                   -- Wins against a rival that actually offered surplus. Beating
+                   -- a rival who delivered exactly the user's limit and nothing
+                   -- more is a win in the mechanism, but it is not evidence we
+                   -- can beat a real solver, and it was inflating the headline.
+                   count(*) FILTER (WHERE our_score <> '0' AND best_rival_score <> '0') AS contested,
+                   count(*) FILTER (WHERE won = 1 AND best_rival_score <> '0') AS contested_wins,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY score_margin_bps) AS median_margin_bps
             FROM orders WHERE resolved_at_ms IS NOT NULL AND our_best_venue IS NOT NULL
             GROUP BY 1`),
@@ -458,6 +464,12 @@ async function collectSolver(db: Db) {
       bids,
       wins,
       noBid: Number(v?.no_bid ?? 0),
+      contested: Number(v?.contested ?? 0),
+      contestedWins: Number(v?.contested_wins ?? 0),
+      contestedWinRatePct:
+        Number(v?.contested ?? 0) > 0
+          ? (100 * Number(v?.contested_wins ?? 0)) / Number(v?.contested)
+          : null,
       // Null rather than 0% when nothing has been bid: an untested venue and a
       // venue that never wins must not look the same.
       winRatePct: bids > 0 ? (100 * wins) / bids : null,

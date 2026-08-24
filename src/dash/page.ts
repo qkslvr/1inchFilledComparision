@@ -195,6 +195,8 @@ function solverCard(v) {
     + '<div class="big ' + cls + '">' + pct(v.winRatePct) + '</div>'
     + '<div class="sub">would have won ' + v.wins + ' of ' + v.bids + ' bids'
     + (v.noBid ? ' &middot; ' + v.noBid + ' unbiddable' : '') + '</div>'
+    + '<div class="rowk" title="Win rate counting only orders where a rival actually offered the user some surplus. Beating a rival who delivered exactly the limit price and nothing more is not evidence we can beat a real solver."><span>vs a rival who bid properly</span><b>'
+    + pct(v.contestedWinRatePct) + '<span class="mut" style="font-weight:400"> (' + v.contestedWins + '/' + v.contested + ')</span></b></div>'
     + '<div class="rowk" title="Of the auctions we would have won, how often the venue price was still good enough when we re-quoted after the result was known."><span>price still there after winning</span><b>' + pct(v.heldPct) + '</b></div>'
     + '<div class="rowk" title="The same re-quote on auctions we lost. A control: if the price holds less often when we win, we were winning because our quote was stale."><span>&hellip;and after losing (control)</span><b>' + pct(v.heldPctLost) + '</b></div>'
     + '<div class="rowk" title="How much more of the trade value we would have given the user than the best rival bidding on that same order. NEGATIVE means we were behind."><span>median edge vs best rival</span><b>' + bps(v.medianMarginBps) + '</b></div>'
