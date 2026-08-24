@@ -96,7 +96,7 @@ export interface CowAuctionSnapshot {
    *  each solution *does* report per order is the buyAmount it would deliver,
    *  and that is directly comparable: scored against the same limit and the same
    *  auction price, it is what a rival offered on the order we bid on. */
-  proposalsByOrder: Map<string, Array<{ solver: string; buyAmount: bigint; isWinner: boolean }>>;
+  proposalsByOrder: Map<string, Array<{ solver: string; buyAmount: bigint; sellAmount: bigint; isWinner: boolean }>>;
 }
 
 export function parseAuctionSnapshot(raw: RawCompetition): CowAuctionSnapshot | null {
@@ -110,14 +110,16 @@ export function parseAuctionSnapshot(raw: RawCompetition): CowAuctionSnapshot | 
       // a price we cannot parse is simply a token we cannot score
     }
   }
-  const proposalsByOrder = new Map<string, Array<{ solver: string; buyAmount: bigint; isWinner: boolean }>>();
+  const proposalsByOrder = new Map<string, Array<{ solver: string; buyAmount: bigint; sellAmount: bigint; isWinner: boolean }>>();
   for (const sol of raw.solutions ?? []) {
     for (const o of sol.orders ?? []) {
-      if (!o.id || !o.buyAmount) continue;
+      if (!o.id || !o.buyAmount || !o.sellAmount) continue;
       const list = proposalsByOrder.get(o.id) ?? [];
       list.push({
         solver: (sol.solverAddress ?? '').toLowerCase(),
         buyAmount: BigInt(o.buyAmount),
+        // The spend side, which is where a buy order's surplus lives.
+        sellAmount: BigInt(o.sellAmount),
         isWinner: sol.isWinner === true,
       });
       proposalsByOrder.set(o.id, list);

@@ -31,7 +31,7 @@ import { walkBuyBaseFloat, walkSellBaseFloat } from '../bebop/depth.js';
 import { walkBuyBase, walkSellBase } from '../kalqix/book.js';
 import { parseAuctionSnapshot, type CowAuctionSnapshot } from './competition.js';
 import { fetchSignedOrder, type CowSignedOrder } from './orders.js';
-import { scoreOf, scoreMarginBps, notionalNative, wouldHaveWon } from './score.js';
+import { scoreOf, scoreOfBuy, scoreMarginBps, notionalNative, wouldHaveWon } from './score.js';
 import { bpsOfCeil, ppmOfCeil, quoteForBaseCeil, rescale, toFloat } from '../pricing/units.js';
 import { buildDecidedOutcome, OUTCOME_ORDER_SQL, OUTCOME_TICK_SQL } from '../report/outcome.js';
 import { log, logError } from '../log.js';
@@ -103,12 +103,12 @@ function sizeUsdOf(
   return null;
 }
 
-function weiToBuyToken(wei: bigint, buyDecimals: number, buySymbol: string): bigint | null {
-  if (buySymbol === config.nativeSymbol) return wei;
+function weiToToken(wei: bigint, decimals: number, symbol: string): bigint | null {
+  if (symbol === config.nativeSymbol) return wei;
   const mid = refPrices.latestMid.get(config.nativeTicker);
   if (mid === undefined) return null;
   const inDollars = quoteForBaseCeil(wei, mid.mid, 18);
-  if (STABLES.has(buySymbol)) return rescale(inDollars, 6, buyDecimals);
+  if (STABLES.has(symbol)) return rescale(inDollars, 6, decimals);
   return null;
 }
 
@@ -121,6 +121,10 @@ interface VenueQuote {
   net: bigint;
   gasCost: bigint;
   fee: bigint;
+  /** Gas in native wei, kept unconverted. A buy order needs it in sellToken,
+   *  a sell order in buyToken, and converting early loses that choice. */
+  gasWei: bigint;
+  feeBps: bigint;
 }
 
 /** Ask every venue what it would pay, and net off what filling would cost us.
@@ -138,7 +142,7 @@ async function quoteVenues(
   const buySymbol = direction === 'SELL_BASE' ? pair.quote.symbol : pair.base.symbol;
   const gasNow = gas.latest;
   const gasPriceWei = gasNow?.gasPriceWei ?? 0n;
-  const fillGas = weiToBuyToken(config.gasUnits * gasPriceWei, buyDecimals, buySymbol) ?? 0n;
+  const fillGas = weiToToken(config.gasUnits * gasPriceWei, buyDecimals, buySymbol) ?? 0n;
   const safety = bpsOfCeil(order.buyAmount, config.safetyMarginBps);
 
   // --- KalqiX ---
@@ -163,6 +167,8 @@ async function quoteVenues(
         net: walk.proceeds - fillGas - fee - safety,
         gasCost: fillGas,
         fee,
+        gasWei: config.gasUnits * gasPriceWei,
+        feeBps: config.kalqixTakerFeeBps,
       });
     }
   }
@@ -172,7 +178,7 @@ async function quoteVenues(
     const q = await fetchKyberQuote(order.sellToken, order.buyToken, order.sellAmount, {
       retries: config.kyber.quoteRetries,
     });
-    const venueGas = weiToBuyToken(q.gasUnits * gasPriceWei, buyDecimals, buySymbol);
+    const venueGas = weiToToken(q.gasUnits * gasPriceWei, buyDecimals, buySymbol);
     if (venueGas !== null) {
       const fee = bpsOfCeil(q.amountOut, config.kyber.feeBps);
       out.set('kyber', {
@@ -180,6 +186,8 @@ async function quoteVenues(
         net: q.amountOut - fillGas - venueGas - fee - safety,
         gasCost: fillGas + venueGas,
         fee,
+        gasWei: (config.gasUnits + q.gasUnits) * gasPriceWei,
+        feeBps: config.kyber.feeBps,
       });
     }
   } catch (err) {
@@ -199,7 +207,7 @@ async function quoteVenues(
         const amount =
           BigInt(Math.floor(raw * 10 ** Math.min(buyDecimals, 12))) *
           10n ** BigInt(Math.max(0, buyDecimals - 12));
-        const venueGas = weiToBuyToken(config.bebop.gasUnits * gasPriceWei, buyDecimals, buySymbol);
+        const venueGas = weiToToken(config.bebop.gasUnits * gasPriceWei, buyDecimals, buySymbol);
         if (venueGas !== null) {
           const fee = bpsOfCeil(amount, config.bebop.feeBps);
           out.set('bebop', {
@@ -207,6 +215,8 @@ async function quoteVenues(
             net: amount - fillGas - venueGas - fee - safety,
             gasCost: fillGas + venueGas,
             fee,
+            gasWei: (config.gasUnits + config.bebop.gasUnits) * gasPriceWei,
+            feeBps: config.bebop.feeBps,
           });
         }
       }
@@ -244,6 +254,62 @@ let evicted = 0;
 /** Why candidates were turned away. Without this the tracker reporting zero is
  *  indistinguishable from the feed being empty, which cost an afternoon. */
 const rejected = { lookup: 0, notOpen: 0, expired: 0, noPair: 0, noQuote: 0, tooFar: 0, newUids: 0, buyKind: 0 };
+
+/** What our bid is worth, in native wei, for either kind of order.
+ *
+ *  SELL: we receive `out` for the user's sellAmount, pay our costs out of it,
+ *        and anything above their floor is surplus.
+ *  BUY:  the user must receive exactly limitBuyAmount, so the question inverts
+ *        — how little of their sellToken do we need? The venue quote is for
+ *        spending the whole cap, so scale it down to the amount actually
+ *        needed. Price impact is convex, so spending less gets a rate at least
+ *        as good: the linear estimate over-states our input and therefore
+ *        under-states our surplus, which is the safe direction to be wrong in.
+ */
+function bidScore(t: Tracked, q: VenueQuote, prices: Map<string, bigint>): bigint | null {
+  const pair = t.pair;
+  const buy = t.direction === 'SELL_BASE' ? pair.quote : pair.base;
+  const sell = t.direction === 'SELL_BASE' ? pair.base : pair.quote;
+
+  if (t.order.kind === 'sell') {
+    return scoreOf({
+      ourBuyAmount: q.net,
+      limitBuyAmount: t.order.buyAmount,
+      buyTokenPrice: prices.get(t.order.buyToken),
+    });
+  }
+
+  if (q.out <= 0n) return null;
+  const requiredIn = (t.order.sellAmount * t.order.buyAmount + q.out - 1n) / q.out;
+  const gasInSell = weiToToken(q.gasWei, sell.decimals, sell.symbol);
+  if (gasInSell === null) return null;
+  const fee = bpsOfCeil(requiredIn, q.feeBps);
+  const safety = bpsOfCeil(t.order.sellAmount, config.safetyMarginBps);
+  return scoreOfBuy({
+    spentSellAmount: requiredIn + gasInSell + fee + safety,
+    limitSellAmount: t.order.sellAmount,
+    sellTokenPrice: prices.get(t.order.sellToken),
+  });
+}
+
+/** What a rival's proposal is worth on this order, same units, same rules. */
+function rivalScore(
+  t: Tracked,
+  p: { buyAmount: bigint; sellAmount: bigint },
+  prices: Map<string, bigint>
+): bigint | null {
+  return t.order.kind === 'sell'
+    ? scoreOf({
+        ourBuyAmount: p.buyAmount,
+        limitBuyAmount: t.order.buyAmount,
+        buyTokenPrice: prices.get(t.order.buyToken),
+      })
+    : scoreOfBuy({
+        spentSellAmount: p.sellAmount,
+        limitSellAmount: t.order.sellAmount,
+        sellTokenPrice: prices.get(t.order.sellToken),
+      });
+}
 
 /** Write one quote round as a tick, and update the standing bid.
  *
@@ -310,18 +376,19 @@ async function quoteRound(t: Tracked): Promise<void> {
   };
   db.insertTick(tick);
 
-  // The bid: the venue paying the user the most, after our costs.
-  let best: { venue: Venue; q: VenueQuote } | null = null;
-  for (const [venue, q] of quotes) if (!best || q.net > best.q.net) best = { venue, q };
+  // The bid: whichever venue produces the best SCORE. Ranking on buy-side net
+  // instead would be meaningless on a buy order, where the user's proceeds are
+  // fixed and the whole contest is about spending less.
+  let best: { venue: Venue; score: bigint } | null = null;
+  for (const [venue, q] of quotes) {
+    const sc = bidScore(t, q, latestPrices);
+    if (sc === null) continue;
+    if (!best || sc > best.score) best = { venue, score: sc };
+  }
   if (!best) return;
-  const score = scoreOf({
-    ourBuyAmount: best.q.net,
-    limitBuyAmount: t.order.buyAmount,
-    buyTokenPrice: latestPrices.get(t.order.buyToken),
-  });
-  if (score === null) return;
+  const score = best.score;
   // Ignored if the auction has already resolved — enforced in SQL, not here.
-  db.recordBid(t.order.uid, score, best.venue, best.q.net, now);
+  db.recordBid(t.order.uid, score, best.venue, quotes.get(best.venue)!.net, now);
   bidsPlaced++;
 }
 
@@ -355,12 +422,17 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
   const bidQuotes = t.lastQuotes;
   tracked.delete(t.order.uid);
 
-  const price = snap.prices.get(t.order.buyToken) ?? latestPrices.get(t.order.buyToken);
+  // Prefer the auction's own price vector; fall back to the last one we saw.
+  const prices = snap.prices.size > 0 ? snap.prices : latestPrices;
   let ourScore: bigint | null = null;
   let best: { venue: Venue; q: VenueQuote } | null = null;
-  for (const [venue, q] of bidQuotes) if (!best || q.net > best.q.net) best = { venue, q };
-  if (best) {
-    ourScore = scoreOf({ ourBuyAmount: best.q.net, limitBuyAmount: t.order.buyAmount, buyTokenPrice: price });
+  for (const [venue, q] of bidQuotes) {
+    const sc = bidScore(t, q, prices);
+    if (sc === null) continue;
+    if (ourScore === null || sc > ourScore) {
+      ourScore = sc;
+      best = { venue, q };
+    }
   }
 
   // The bar is what rivals offered on THIS order, not the winner's score for
@@ -373,7 +445,7 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
   let bestRivalScore: bigint | null = null;
   let bestRivalSolver: string | null = null;
   for (const p of proposals) {
-    const rs = scoreOf({ ourBuyAmount: p.buyAmount, limitBuyAmount: t.order.buyAmount, buyTokenPrice: price });
+    const rs = rivalScore(t, p, prices);
     if (rs === null) continue;
     if (bestRivalScore === null || rs > bestRivalScore) {
       bestRivalScore = rs;
@@ -386,7 +458,10 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
   // That is not a bid, so it has no margin — feeding it in as a floor value
   // dragged the median onto it.
   const hadBid = ourScore !== null && ourScore > 0n;
-  const notional = notionalNative(t.order.buyAmount, price);
+  const notional =
+    t.order.kind === 'sell'
+      ? notionalNative(t.order.buyAmount, prices.get(t.order.buyToken))
+      : notionalNative(t.order.sellAmount, prices.get(t.order.sellToken));
   const margin =
     hadBid && bestRivalScore !== null && notional !== null
       ? scoreMarginBps(ourScore!, bestRivalScore, notional)
@@ -438,16 +513,6 @@ async function consider(uid: string): Promise<void> {
   }
   if (order.validToMs && order.validToMs < Date.now()) {
     rejected.expired++;
-    return;
-  }
-  // Buy orders are excluded until they are modelled properly. The user names
-  // exactly what they will receive and a cap on what they will spend, so the
-  // surplus sits on the SELL side — they spend less than the cap. Measuring it
-  // as (delivered - limitBuy), which is what every other path here does, gives
-  // exactly zero on every buy order, for every solver. That made every rival
-  // score nothing and handed us a free win on all of them.
-  if (order.kind === 'buy') {
-    rejected.buyKind++;
     return;
   }
   const match = pairForTokens(wethFor(order.sellToken), wethFor(order.buyToken));

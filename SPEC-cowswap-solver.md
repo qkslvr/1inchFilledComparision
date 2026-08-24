@@ -316,18 +316,15 @@ State these on the page, not just here.
 - The 3.6% score gap — protocol fee policy is the prime suspect.
 - Quote interval in Phase B: fast enough to be honest, slow enough not to
   exhaust Kyber's rate limit, which already 429s under current load.
-- **Buy orders are excluded, and must be modelled before any win rate is
-  final.** On a sell order the user names what they give and a floor on what
-  they receive, so surplus is `delivered - limitBuy`. On a **buy** order they
-  name exactly what they receive and a *cap* on what they spend, so surplus is
-  `limitSell - spent` — on the sell side. Applying the sell-order formula to a
-  buy order yields exactly zero for every solver, because `executedBuyAmount`
-  equals `buyAmount` by construction. That scored every rival at zero and handed
-  us a free win on all of them; 25 of 60 recorded wins came from it.
-
-  Modelling them needs a reverse quote — "how little sellToken to obtain exactly
-  this buyAmount" — which KalqiX's book walk supports directly but Kyber's
-  amountIn-only API does not, so it needs iteration or inversion.
+- Buy orders are modelled, with one approximation worth knowing. Surplus on a
+  BUY order is `limitSell - spent`, on the sell side, because the user receives
+  exactly what they asked for and saves on what they part with. Our required
+  spend is derived from a quote for the full cap, scaled to the output actually
+  needed. Price impact is convex, so a smaller trade gets a rate at least as
+  good: the linear estimate over-states our spend and under-states our surplus.
+  Wrong in the conservative direction, but it should become a real reverse quote
+  — KalqiX's book walk can do it exactly; Kyber's amountIn-only API needs a
+  short binary search.
 - How to treat `partiallyFillable` orders — bid on the full amount, or model
   partial fills? 316 of 1,675 tracked orders are partially fillable, and a rival
   filling part of one will show a proportionally smaller buyAmount, which the

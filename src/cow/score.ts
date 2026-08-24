@@ -16,6 +16,31 @@
 /** Prices are native wei per token atom, scaled by 1e18. */
 const PRICE_SCALE = 10n ** 18n;
 
+/** Which side of the trade the surplus lands on.
+ *
+ *  A SELL order fixes what the user gives and floors what they receive, so any
+ *  improvement arrives as extra buyToken. A BUY order fixes what they receive
+ *  and caps what they spend, so the improvement is sellToken they did not have
+ *  to part with. Same idea, opposite side — and using the sell-order formula on
+ *  a buy order yields exactly zero for everyone, because executedBuyAmount
+ *  equals buyAmount by construction. */
+export interface BuyScoreInput {
+  /** what we (or a rival) would actually spend to fill it */
+  spentSellAmount: bigint;
+  /** the most the user agreed to spend */
+  limitSellAmount: bigint;
+  /** auction price for the sell token, since that is what is saved */
+  sellTokenPrice: bigint | undefined;
+}
+
+/** Surplus on a BUY order: sellToken the user keeps, valued in native. */
+export function scoreOfBuy({ spentSellAmount, limitSellAmount, sellTokenPrice }: BuyScoreInput): bigint | null {
+  if (sellTokenPrice === undefined) return null;
+  const saved = limitSellAmount - spentSellAmount;
+  if (saved <= 0n) return 0n;
+  return (saved * sellTokenPrice) / PRICE_SCALE;
+}
+
 export interface ScoreInput {
   /** what our bid would deliver to the user, in buyToken atoms */
   ourBuyAmount: bigint;
