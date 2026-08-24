@@ -243,7 +243,7 @@ let holdChecks = 0;
 let evicted = 0;
 /** Why candidates were turned away. Without this the tracker reporting zero is
  *  indistinguishable from the feed being empty, which cost an afternoon. */
-const rejected = { lookup: 0, notOpen: 0, expired: 0, noPair: 0, noQuote: 0, tooFar: 0, newUids: 0 };
+const rejected = { lookup: 0, notOpen: 0, expired: 0, noPair: 0, noQuote: 0, tooFar: 0, newUids: 0, buyKind: 0 };
 
 /** Write one quote round as a tick, and update the standing bid.
  *
@@ -440,6 +440,16 @@ async function consider(uid: string): Promise<void> {
     rejected.expired++;
     return;
   }
+  // Buy orders are excluded until they are modelled properly. The user names
+  // exactly what they will receive and a cap on what they will spend, so the
+  // surplus sits on the SELL side — they spend less than the cap. Measuring it
+  // as (delivered - limitBuy), which is what every other path here does, gives
+  // exactly zero on every buy order, for every solver. That made every rival
+  // score nothing and handed us a free win on all of them.
+  if (order.kind === 'buy') {
+    rejected.buyKind++;
+    return;
+  }
   const match = pairForTokens(wethFor(order.sellToken), wethFor(order.buyToken));
   if (!match) {
     rejected.noPair++;
@@ -506,6 +516,7 @@ async function consider(uid: string): Promise<void> {
     limitBuyAmount: order.buyAmount,
     validToMs: order.validToMs || null,
     partiallyFillable: order.partiallyFillable,
+    orderKind: order.kind,
   });
   t.registered = true;
   tracked.set(uid, t);
@@ -584,7 +595,7 @@ const status = setInterval(() => {
     `status: tracked=${tracked.size} discovered=${discovered} bids=${bidsPlaced} ` +
       `resolved=${resolvedCount} won=${wonCount} holdChecks=${holdChecks} evicted=${evicted} ` +
       `new=${rejected.newUids} rejected(lookup=${rejected.lookup} notOpen=${rejected.notOpen} ` +
-      `expired=${rejected.expired} noPair=${rejected.noPair} noQuote=${rejected.noQuote} tooFar=${rejected.tooFar}) ` +
+      `expired=${rejected.expired} noPair=${rejected.noPair} buyKind=${rejected.buyKind} noQuote=${rejected.noQuote} tooFar=${rejected.tooFar}) ` +
       `bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'} ` +
       (db.storagePressure ? ` STORAGE-PRESSURE(${db.droppedTicks} dropped)` : '')
   );

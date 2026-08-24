@@ -111,6 +111,7 @@ export interface OrderInsert {
   limitBuyAmount?: bigint | null;
   validToMs?: number | null;
   partiallyFillable?: boolean | null;
+  orderKind?: 'sell' | 'buy' | null;
 }
 
 export interface TickInsert {
@@ -425,8 +426,8 @@ export class Db {
         gas_bump_estimate, gas_price_estimate, allow_partial_fills, allow_multiple_fills,
         deadline_ms, extension_raw, order_struct_json,
         cow_auction_id, cow_solver_count, cow_winner_solver, cow_winner_score, cow_reference_score,
-        limit_sell_amount, limit_buy_amount, valid_to_ms, partially_fillable
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        limit_sell_amount, limit_buy_amount, valid_to_ms, partially_fillable, order_kind
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (order_hash) DO NOTHING
       RETURNING 1 AS inserted`,
       [
@@ -468,6 +469,7 @@ export class Db {
         s(o.limitBuyAmount ?? null),
         o.validToMs ?? null,
         o.partiallyFillable === null || o.partiallyFillable === undefined ? null : o.partiallyFillable ? 1 : 0,
+        o.orderKind ?? null,
       ]
     );
     return rows.length > 0;

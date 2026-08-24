@@ -57,6 +57,7 @@ export const MIGRATIONS: string[] = [
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS limit_buy_amount TEXT`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS valid_to_ms BIGINT`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS partially_fillable SMALLINT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_kind TEXT`,
   // Our bid, formed strictly before the auction resolved.
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS our_score TEXT`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS our_best_venue TEXT`,
@@ -164,6 +165,7 @@ CREATE TABLE IF NOT EXISTS orders (
   limit_buy_amount   TEXT,
   valid_to_ms        BIGINT,
   partially_fillable SMALLINT,
+  order_kind         TEXT,
   our_score          TEXT,
   our_best_venue     TEXT,
   our_bid_out        TEXT,
