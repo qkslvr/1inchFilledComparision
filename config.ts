@@ -358,8 +358,12 @@ export const config = {
   gasPollIntervalMs: 30_000,
   /** Gas units for a hypothetical fill tx, incl. wrap/unwrap allowance for native-ETH takers. */
   gasUnits: 300_000n,
-  kalqixTakerFeeBps: 8n,
-  safetyMarginBps: 10n,
+  kalqixTakerFeeBps: 5n,
+  /** Set to zero deliberately: the solver simulation prices the trade as it
+   *  would actually be filled, with no cushion held back. A margin here is a
+   *  commercial choice, not a cost, and folding it in made every bid look worse
+   *  than the price we could really have offered. */
+  safetyMarginBps: 0n,
   /** A decision tick whose snapshot is older than this is degraded (no-lookahead rule). */
   degradedSnapshotAgeMs: 3000,
   oneInchApiBase: 'https://api.1inch.dev/fusion',
@@ -389,7 +393,7 @@ export const config = {
     restBase: 'https://api.bebop.xyz/pmm',
     chainSlug: profile.bebopChainSlug ?? profile.kyberChainSlug,
     /** our assumed markup on a Bebop-hedged fill */
-    feeBps: 3n,
+    feeBps: 5n,
     /** settlement tx gas for an RFQ self-execution fill */
     gasUnits: 250_000n,
     /** a tick using stream data older than this is bebop-degraded */
@@ -419,7 +423,7 @@ export const config = {
     chainSlug: profile.cowChainSlug ?? null,
     /** quotes need a from/receiver to be returned; nothing is signed or sent */
     quoteFrom: '0x0000000000000000000000000000000000000001',
-    feeBps: 3n,
+    feeBps: 5n,
     quoteIntervalMs: 2000,
     quoteTimeoutMs: 5000,
     degradedQuoteAgeMs: 5000,
@@ -471,7 +475,14 @@ export const config = {
      *  price are tracked. */
     solverMaxDistanceBps: 250n,
     /** Hard ceiling on orders quoted at once, whatever the filter admits. */
-    solverMaxTracked: 12,
+    solverMaxTracked: 60,
+    /** Kyber's own headers report 30 requests per 10s per IP. Staying under it
+     *  rather than at it, because every collector on this host shares the IP. */
+    kyberBudgetPerWindow: 24,
+    kyberBudgetWindowMs: 10_000,
+    /** A Kyber quote older than this is dropped rather than reused, so a starved
+     *  order reports no Kyber price instead of a stale one. */
+    kyberQuoteMaxAgeMs: 30_000,
     /** Wait after learning we won before re-quoting, to model the gap a real
      *  solver faces between winning and its settlement landing. */
     solverHoldDelaysMs: [0, 12_000],
@@ -481,6 +492,13 @@ export const config = {
      *  minutes is a resting limit order that may never fill near touch. Holding
      *  a slot for it starves the live flow the simulation exists to measure. */
     solverMaxTrackAgeMs: 300_000,
+    /** Tolerance on the re-quote before a price counts as having slipped.
+     *
+     *  This used to key off safetyMarginBps, which is now zero — and a strict
+     *  test marks a one-wei move as a failure, which is how 37 re-quotes came
+     *  to read "slipped" beside 0.0 bps of slippage. One bp is measurement
+     *  noise, not an economic cushion. */
+    solverHoldToleranceBps: 1n,
     /** Keep watching an order for this long after its validTo passes.
      *
      *  Measured: orders arrive with only 6-26s of validity left once our ~13s
@@ -492,7 +510,7 @@ export const config = {
   },
   pancake: {
     /** our assumed markup on a PancakeSwap-hedged fill, same basis as the others */
-    feeBps: 3n,
+    feeBps: 5n,
     /** a tick using a quote older than this, or for a stale size, is degraded */
     degradedQuoteAgeMs: 5000,
   },
@@ -501,7 +519,7 @@ export const config = {
     chainSlug: profile.kyberChainSlug,
     clientId: 'shadow-resolver',
     /** our assumed markup on a Kyber-hedged fill */
-    feeBps: 3n,
+    feeBps: 5n,
     /** fallback swap-leg gas units when the quote carries no estimate */
     fallbackGasUnits: 400_000n,
     quoteIntervalMs: 2000,

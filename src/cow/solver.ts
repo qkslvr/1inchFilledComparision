@@ -26,6 +26,7 @@ import { GasPoller } from '../gas/poller.js';
 import { RefPriceLoop, Sampler, rescaleBookDecimals } from '../kalqix/sampler.js';
 import { chooseBookFetcher } from '../kalqix/client.js';
 import { fetchKyberQuote } from '../kyber/client.js';
+import { RequestBudget } from '../kyber/budget.js';
 import { createBebopSource } from '../bebop/source.js';
 import { walkBuyBaseFloat, walkSellBaseFloat } from '../bebop/depth.js';
 import { walkBuyBase, walkSellBase } from '../kalqix/book.js';
@@ -40,6 +41,13 @@ import { log, logError } from '../log.js';
 const SDK_VERSION = 'cow-solver-1';
 const LATEST = 'https://api.cow.fi/mainnet/api/v2/solver_competition/latest';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// KalqiX and Bebop are in-memory and free; only Kyber costs a request, so it is
+// the only thing that has to be rationed as the tracked count grows.
+const kyberBudget = new RequestBudget(config.cow.kyberBudgetPerWindow, config.cow.kyberBudgetWindowMs);
+/** Last Kyber answer per order, so a round that loses the draw ages its quote
+ *  instead of losing the venue entirely. */
+const lastKyber = new Map<string, { q: Awaited<ReturnType<typeof fetchKyberQuote>>; atMs: number }>();
 
 const db = await Db.open(config.chainId, { schemaOverride: config.schemaOverride });
 const runId = await db.startRun(
@@ -194,9 +202,19 @@ async function quoteVenues(t: {
 
   // --- Kyber ---
   try {
-    const q = await fetchKyberQuote(order.sellToken, order.buyToken, order.sellAmount, {
-      retries: config.kyber.quoteRetries,
-    });
+    let q: Awaited<ReturnType<typeof fetchKyberQuote>> | null = null;
+    if (kyberBudget.take()) {
+      q = await fetchKyberQuote(order.sellToken, order.buyToken, order.sellAmount, {
+        retries: config.kyber.quoteRetries,
+      });
+      lastKyber.set(order.uid, { q, atMs: Date.now() });
+    } else {
+      const prev = lastKyber.get(order.uid);
+      // Reuse only while it is plausibly still the price. Past that, no Kyber
+      // column is honest; a stale one is not.
+      if (prev && Date.now() - prev.atMs < config.cow.kyberQuoteMaxAgeMs) q = prev.q;
+    }
+    if (q === null) throw new Error('no kyber budget and no fresh quote');
     // For a configured pair we can price gas through the reference book; for an
     // arbitrary token the quote's own USD figure is the only rate to hand, and
     // it is right there in the response.
@@ -220,7 +238,9 @@ async function quoteVenues(t: {
       });
     }
   } catch (err) {
-    logError(`kyber quote failed for ${order.uid.slice(0, 12)}`, err);
+    if (!String(err).includes('no kyber budget')) {
+      logError(`kyber quote failed for ${order.uid.slice(0, 12)}`, err);
+    }
   }
 
   // --- Bebop ---
@@ -459,12 +479,12 @@ async function checkHolds(t: Tracked, bidQuotes: Map<Venue, VenueQuote>, won: bo
       // have made at all, so it counts as not held with no slippage figure.
       const slippage =
         re && bid.net > 0n ? Number(((bid.net - re.net) * 10_000n) / bid.net) : null;
-      // "Held" means the fill would still have been good, not that the price was
-      // identical to the wei. Our bid already carries a safetyMarginBps cushion,
-      // so a shortfall inside it leaves us whole. Requiring an exact match
-      // reported 37 re-quotes as slipped whose slippage rounded to 0.0 bps,
-      // which is what made the column look broken.
-      const held = re !== undefined && slippage !== null && slippage <= Number(config.safetyMarginBps);
+      // "Held" means the price was still there, not that it matched to the wei.
+      // The tolerance is measurement noise, deliberately not the safety margin —
+      // that is now zero, and a strict test reported 37 re-quotes as slipped
+      // beside 0.0 bps of slippage.
+      const held =
+        re !== undefined && slippage !== null && slippage <= Number(config.cow.solverHoldToleranceBps);
       db.insertQuoteHold(t.order.uid, venue, delay, now, bid.net, re?.net ?? null, held, slippage, won);
       holdChecks++;
     }
@@ -476,6 +496,7 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
   const now = Date.now();
   const bidQuotes = t.lastQuotes;
   tracked.delete(t.order.uid);
+  lastKyber.delete(t.order.uid);
 
   // Prefer the auction's own price vector; fall back to the last one we saw.
   const prices = snap.prices.size > 0 ? snap.prices : latestPrices;
@@ -679,6 +700,7 @@ async function pollAuction(): Promise<void> {
     const expired = t.order.validToMs > 0 && now - t.order.validToMs > config.cow.solverExpiryGraceMs;
     if (!tooOld && !expired) continue;
     tracked.delete(uid);
+    lastKyber.delete(uid);
     evicted++;
     db.setTerminal(uid, expired ? 'expired' : 'unresolved', null, 0n, 0n);
   }
@@ -726,6 +748,7 @@ const status = setInterval(() => {
       `resolved=${resolvedCount} won=${wonCount} holdChecks=${holdChecks} evicted=${evicted} ` +
       `new=${rejected.newUids} rejected(lookup=${rejected.lookup} notOpen=${rejected.notOpen} ` +
       `expired=${rejected.expired} noDecimals=${rejected.noDecimals} noQuote=${rejected.noQuote} tooFar=${rejected.tooFar}) ` +
+      `kyberBudget=${kyberBudget.available}/${config.cow.kyberBudgetPerWindow} (denied ${kyberBudget.denied}) ` +
       `bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'} ` +
       (db.storagePressure ? ` STORAGE-PRESSURE(${db.droppedTicks} dropped)` : '')
   );
