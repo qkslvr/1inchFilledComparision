@@ -810,7 +810,9 @@ async function pollAuction(): Promise<void> {
 }
 
 let auctionInFlight = false;
-let auctionBackoffUntil = 0;
+// Stagger the first poll. Both datasets are started by the same supervisor pass,
+// so without this they tick in lockstep forever and every collision is mutual.
+let auctionBackoffUntil = Date.now() + Math.floor(Math.random() * config.cow.pollJitterMs);
 const auctionTimer = setInterval(() => {
   if (auctionInFlight || Date.now() < auctionBackoffUntil) return;
   auctionInFlight = true;

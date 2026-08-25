@@ -520,12 +520,21 @@ export const config = {
     maxBlockSpan: 200,
     /** How often to read the public solver-competition feed.
      *
-     *  Measured: it advances every ~13s (min 5s). At 3s, four of every five
-     *  polls returned an auction we had already seen — and the payload is ~1 MB,
-     *  so that was 28 GB/day for nothing, which is the likeliest reason CoW
-     *  started answering 429. Six seconds still comfortably beats the minimum
-     *  observed advance. */
-    competitionPollMs: 6_000,
+     *  CoW's limit is far tighter than the endpoint advertises, and the bucket
+     *  is shared ACROSS CHAINS: a mainnet request followed a second later by an
+     *  Arbitrum one gets 429, and once tripped the penalty persists regardless
+     *  of how long you then wait. Two solver processes at 6s each was double
+     *  what it tolerates, and cicada — the newer, slower chain — was starved to
+     *  a standstill by the busier one.
+     *
+     *  Fifteen seconds per process is ~7.5s combined, inside the roughly one
+     *  request per six seconds that survives. No signal is lost: mainnet
+     *  auctions advance every ~25s and Arbitrum every ~4 minutes, so we were
+     *  polling far faster than either produces anything. */
+    competitionPollMs: 15_000,
+    /** Random delay before the first poll, so two processes started together by
+     *  the supervisor do not line up and collide on every tick thereafter. */
+    pollJitterMs: 7_000,
     /** How long to stop polling after a 429, rather than retrying into it. */
     rateLimitBackoffMs: 30_000,
     /** How long the settlement backstop waits before claiming a trade.
