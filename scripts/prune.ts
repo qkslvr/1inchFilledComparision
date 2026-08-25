@@ -30,6 +30,15 @@ const dryRun = process.argv.includes('--dry-run');
 const KEEP_DAYS = Number(process.env.PRUNE_KEEP_DAYS ?? 1);
 const cutoff = Date.now() - KEEP_DAYS * 86_400_000;
 
+/** Ticks for an order that never resolved are kept far more briefly.
+ *
+ *  The solver quotes every tracked order every few seconds, so a day produces
+ *  hundreds of thousands of ticks — and the great majority belong to orders that
+ *  expired without ever reaching an auction. Those carry no comparison, so their
+ *  quote history answers no question; keeping them for the full window filled
+ *  the database and made the storage valve shed the live writes that matter. */
+const UNRESOLVED_KEEP_MS = 2 * 3_600_000;
+
 const db = await Db.open(config.chainId, { schemaOverride: config.schemaOverride });
 const label = `${config.chainLabel} (keep ${KEEP_DAYS}d, cutoff ${new Date(cutoff).toISOString()})`;
 console.log(`${dryRun ? 'DRY RUN — ' : ''}pruning ${label}`);
@@ -104,6 +113,27 @@ if (deadTicks > 0) {
                   AND o.terminal_status <> 'filled'
                   AND o.terminal_at_ms < ?`, [cutoff]);
   console.log(`  deleted ${deadTicks.toLocaleString('en-US')} ticks`);
+}
+
+// Solver datasets only: an order evicted without resolving is pure volume.
+const unresolvedTicks = Number(
+  (
+    await db.get<{ c: number }>(
+      `SELECT count(*) AS c FROM ticks t JOIN orders o USING (order_hash)
+       WHERE o.terminal_status IN ('unresolved','expired') AND o.terminal_at_ms < ?`,
+      [Date.now() - UNRESOLVED_KEEP_MS]
+    )
+  )?.c ?? 0
+);
+if (unresolvedTicks > 0) {
+  await db.all(
+    `DELETE FROM ticks t USING orders o
+     WHERE o.order_hash = t.order_hash
+       AND o.terminal_status IN ('unresolved','expired')
+       AND o.terminal_at_ms < ?`,
+    [Date.now() - UNRESOLVED_KEEP_MS]
+  );
+  console.log(`  deleted ${unresolvedTicks.toLocaleString('en-US')} ticks of orders that never resolved`);
 }
 
 if (stuckTicks > 0) {

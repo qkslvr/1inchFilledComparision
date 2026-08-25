@@ -717,6 +717,10 @@ async function pollAuction(): Promise<void> {
     lastKyber.delete(uid);
     evicted++;
     db.setTerminal(uid, expired ? 'expired' : 'unresolved', null, 0n, 0n);
+    // Without this the row has a terminal_status but no terminal_at_ms, and
+    // every prune rule keys off the timestamp — so 4,726 evicted orders held
+    // their ticks forever and the storage valve started shedding live writes.
+    void db.all(`UPDATE orders SET terminal_at_ms = ? WHERE order_hash = ?`, [now, uid]);
   }
 
   // Then discovery. The solvable set turns over by only a handful of uids per
