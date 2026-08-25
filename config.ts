@@ -535,17 +535,17 @@ export const config = {
     /** Random delay before the first poll, so two processes started together by
      *  the supervisor do not line up and collide on every tick thereafter. */
     pollJitterMs: 7_000,
-    /** Minimum gap between CoW requests by ANY process on this host.
+    /** Minimum gap between CoW requests by ANY process on this host — polls and
+     *  order lookups alike, since they share one budget.
      *
-     *  Measured: roughly one request per six seconds survives, and the bucket is
-     *  shared across chains. Eight gives a little headroom. Each dataset still
-     *  polls on its own 15s timer; this only stops the two of them landing
-     *  together, which is what starved cicada completely. */
-    sharedPollMinIntervalMs: 8_000,
-    /** Order lookups are small and far more permissive than the competition
-     *  endpoint, but they are not free and they share the same budget, so they
-     *  are paced too — just far more loosely. */
-    orderLookupMinIntervalMs: 700,
+     *  Measured with every one of our pollers stopped: the endpoint answered
+     *  6 of 6 at 4s spacing on Arbitrum and 3 of 3 on mainnet. So the limit is
+     *  roughly one request per four seconds from this IP, and every 429 we spent
+     *  the afternoon fighting was self-inflicted. */
+    sharedPollMinIntervalMs: 4_000,
+    /** How long a lookup will queue for the shared slot before giving up. Past
+     *  this the order has usually expired anyway. */
+    lookupMaxWaitMs: 20_000,
     /** How long to stop polling after a 429, rather than retrying into it. */
     rateLimitBackoffMs: 30_000,
     /** How long the settlement backstop waits before claiming a trade.

@@ -5,7 +5,7 @@
  *  it alone. This endpoint is public and supplies the missing half. */
 import { config } from '../../config.js';
 import { logError } from '../log.js';
-import { takePollSlot } from './pollgate.js';
+import { awaitPollSlot } from './pollgate.js';
 
 const ORDERS = `${config.cow.apiBase}/${config.cow.chainSlug}/api/v1/orders`;
 
@@ -25,10 +25,12 @@ export interface CowSignedOrder {
 }
 
 export async function fetchSignedOrder(uid: string): Promise<CowSignedOrder | null> {
-  // Shares the host's CoW budget with the auction polls. These were exempt, and
-  // at roughly one a second they kept the bucket empty, so the other dataset's
-  // gated poll always arrived to find nothing left.
-  if (!takePollSlot(config.cow.orderLookupMinIntervalMs)) return null;
+  // Shares the host's CoW budget with the auction polls, and waits its turn
+  // rather than being dropped: a skipped poll costs nothing because another
+  // follows, but a skipped lookup loses that order for good.
+  if (!(await awaitPollSlot(config.cow.sharedPollMinIntervalMs, config.cow.lookupMaxWaitMs))) {
+    return null;
+  }
   try {
     const res = await fetch(`${ORDERS}/${uid}`, {
       headers: { Accept: 'application/json' },

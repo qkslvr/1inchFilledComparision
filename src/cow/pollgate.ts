@@ -49,6 +49,22 @@ export function takePollSlot(minIntervalMs: number = config.cow.sharedPollMinInt
   return true;
 }
 
+/** Wait for the slot instead of giving up on it.
+ *
+ *  Periodic polls should skip a denied tick — another will come. A one-off
+ *  lookup should not: dropping it loses the order permanently, and discovery is
+ *  the whole point. So lookups queue behind the gate rather than failing, up to
+ *  a bound past which the order has usually expired anyway. */
+export async function awaitPollSlot(minIntervalMs: number, maxWaitMs: number): Promise<boolean> {
+  const deadline = Date.now() + maxWaitMs;
+  for (;;) {
+    if (takePollSlot(minIntervalMs)) return true;
+    if (Date.now() >= deadline) return false;
+    const wait = Math.min(pollSlotWaitMs(minIntervalMs) + 50, deadline - Date.now());
+    await new Promise((r) => setTimeout(r, Math.max(50, wait)));
+  }
+}
+
 /** How long until the slot frees up, for logging that is not just "denied". */
 export function pollSlotWaitMs(minIntervalMs: number = config.cow.sharedPollMinIntervalMs): number {
   try {
