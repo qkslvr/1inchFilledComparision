@@ -398,8 +398,26 @@ async function dbFor(chain: { chainId: number; schemaOverride?: string | null })
  *
  *  Win rate is over auctions we actually bid on — an order we never quoted is
  *  not a loss, and counting it as one would understate every venue. */
+/** Asset-class buckets for the overview.
+ *
+ *  Symbol matching, so it is a heuristic and not a taxonomy: anything with BTC
+ *  in the name counts as BTC, which catches WBTC/cbBTC/tBTC/BTCB and would also
+ *  catch a token that merely mentions it. Stablecoin is an explicit list rather
+ *  than a pattern, because "USD" appears in plenty of things that do not hold a
+ *  peg. */
+const STABLE_SYMBOLS = new Set([
+  'USDC', 'USDT', 'DAI', 'BUSD', 'FRAX', 'LUSD', 'TUSD', 'USDP', 'GUSD',
+  'CRVUSD', 'PYUSD', 'USDE', 'SUSD', 'USDS', 'USDD', 'MIM', 'FDUSD', 'RLUSD',
+]);
+const isStable = (s: string | null) => !!s && STABLE_SYMBOLS.has(s.toUpperCase());
+const isBtc = (s: string | null) => !!s && s.toUpperCase().includes('BTC');
+const isEth = (s: string | null) => {
+  const u = (s ?? '').toUpperCase();
+  return u === 'ETH' || u === 'WETH' || /^(ST|W|R|CB|WE|OS|FR)?ETH$/.test(u);
+};
+
 async function collectSolver(db: Db) {
-  const [venueRows, holdRows, rows, coverage] = await Promise.all([
+  const [venueRows, holdRows, rows, coverage, classRows, assetRows] = await Promise.all([
     // A row whose score was zero never carried a bid, so it is neither a win
     // nor a loss and has no margin. Counting it as a bid understates every
     // win rate; letting its -10000 bps into the median destroys it.
@@ -422,16 +440,41 @@ async function collectSolver(db: Db) {
     db.all(`SELECT o.order_hash, o.pair, o.resolved_at_ms, o.won, o.score_margin_bps,
                    o.our_best_venue, o.our_score, o.cow_winner_score, o.cow_reference_score,
                    o.cow_solver_count, o.size_usd, o.bid_at_ms, o.rival_count, o.best_rival_solver,
+                   o.surplus_usd, o.edge_usd, o.fee_usd, o.order_kind,
                    (SELECT count(*) FROM ticks t WHERE t.order_hash = o.order_hash) AS quote_rounds,
                    (SELECT bool_and(h.held = 1) FROM quote_holds h WHERE h.order_hash = o.order_hash) AS all_held,
                    (SELECT max(h.slippage_bps) FROM quote_holds h WHERE h.order_hash = o.order_hash) AS worst_slippage_bps
             FROM orders o WHERE o.resolved_at_ms IS NOT NULL
-            ORDER BY o.resolved_at_ms DESC LIMIT 400`),
+            ORDER BY o.resolved_at_ms DESC LIMIT 2000`),
     db.get(`SELECT count(*) AS tracked,
                    count(*) FILTER (WHERE resolved_at_ms IS NOT NULL) AS resolved,
-                   count(*) FILTER (WHERE our_score IS NOT NULL) AS bid
+                   count(*) FILTER (WHERE our_score IS NOT NULL) AS bid,
+                   count(*) FILTER (WHERE won = 1) AS won,
+                   sum(surplus_usd) AS surplus_usd, sum(fee_usd) AS fee_usd,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY score_margin_bps) AS median_margin_bps,
+                   min(received_at_ms) AS first_ms, max(received_at_ms) AS last_ms
             FROM orders`),
+    db.all(`SELECT sell_symbol, buy_symbol, count(*) AS n FROM orders
+            WHERE sell_symbol IS NOT NULL OR buy_symbol IS NOT NULL
+            GROUP BY 1, 2`),
+    db.get(`SELECT count(DISTINCT sym) AS assets FROM (
+              SELECT sell_symbol AS sym FROM orders WHERE sell_symbol IS NOT NULL
+              UNION SELECT buy_symbol FROM orders WHERE buy_symbol IS NOT NULL) u`),
   ]);
+
+  // One pass over the pair counts, so each order lands in exactly one bucket.
+  let btc = 0, eth = 0, stable = 0, other = 0, classified = 0;
+  for (const r of classRows) {
+    const n = Number(r.n);
+    classified += n;
+    const a = r.sell_symbol as string | null;
+    const b = r.buy_symbol as string | null;
+    if (isStable(a) && isStable(b)) stable += n;
+    else if (isBtc(a) || isBtc(b)) btc += n;
+    else if (isEth(a) || isEth(b)) eth += n;
+    else other += n;
+  }
+  const share = (n: number) => (classified > 0 ? (100 * n) / classified : null);
 
   // Won and lost arms kept apart. If the quote holds far less often on the
   // auctions we won, that is adverse selection — we won *because* our price was
@@ -487,6 +530,26 @@ async function collectSolver(db: Db) {
 
   return {
     venues,
+    overview: {
+      auctionsSeen: Number(coverage?.tracked ?? 0),
+      resolved: Number(coverage?.resolved ?? 0),
+      bidsWon: Number(coverage?.won ?? 0),
+      assetsSeen: Number(assetRows?.assets ?? 0),
+      observedHours:
+        coverage?.first_ms && coverage?.last_ms
+          ? (Number(coverage.last_ms) - Number(coverage.first_ms)) / 3_600_000
+          : 0,
+      btcPct: share(btc),
+      ethPct: share(eth),
+      stablePct: share(stable),
+      otherPct: share(other),
+      medianMarginBps:
+        coverage?.median_margin_bps === null || coverage?.median_margin_bps === undefined
+          ? null
+          : Number(coverage.median_margin_bps),
+      surplusUsd: coverage?.surplus_usd === null || coverage?.surplus_usd === undefined ? null : Number(coverage.surplus_usd),
+      feeUsd: coverage?.fee_usd === null || coverage?.fee_usd === undefined ? null : Number(coverage.fee_usd),
+    },
     coverage: {
       tracked: Number(coverage?.tracked ?? 0),
       resolved: Number(coverage?.resolved ?? 0),
@@ -514,6 +577,10 @@ async function collectSolver(db: Db) {
       held: r.all_held === null ? null : r.all_held === true,
       slippageBps: r.worst_slippage_bps === null ? null : Number(r.worst_slippage_bps),
       bidLeadMs: r.bid_at_ms === null ? null : Number(r.resolved_at_ms) - Number(r.bid_at_ms),
+      kind: r.order_kind,
+      surplusUsd: r.surplus_usd === null ? null : Number(r.surplus_usd),
+      edgeUsd: r.edge_usd === null ? null : Number(r.edge_usd),
+      feeUsd: r.fee_usd === null ? null : Number(r.fee_usd),
     })),
   };
 }

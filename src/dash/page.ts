@@ -146,6 +146,19 @@ export const PAGE = `<!doctype html>
   <div class="lnote">Every margin is net of the auction price, gas on each transaction we would send, venue fees, our 3 bps markup, and a 10 bps safety buffer. bps = basis points; 100 bps = 1%.</div>
 </dialog>
 <style>
+.overview{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:1px;background:#262C3D;border:1px solid #262C3D;border-radius:10px;overflow:hidden;margin:14px 0 20px}
+.ov{background:#0F131C;padding:12px 14px;display:flex;flex-direction:column;gap:3px}
+.ovl{font-size:10px;letter-spacing:.09em;color:#6C7590;font-weight:600}
+.ovv{font-size:19px;font-weight:640;letter-spacing:-.02em;color:#E6E9F2}
+.ovs{font-size:11px;color:#6C7590}
+.pager{display:flex;gap:5px;align-items:center;margin:10px 0 4px;flex-wrap:wrap}
+.pager button{background:#141824;color:#E6E9F2;border:1px solid #262C3D;border-radius:6px;padding:4px 9px;font:inherit;font-size:12px;cursor:pointer}
+.pager button:hover:not(:disabled){border-color:#8B9CF0}
+.pager button.on{background:#2A3350;border-color:#8B9CF0}
+.pager button:disabled{opacity:.35;cursor:default}
+.pager .mut{margin-left:6px;font-size:11px}
+td.pos{color:#4ADE80}
+td.neg{color:#F87171}
 .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
 .controls input,.controls select{background:#141824;color:#E6E9F2;border:1px solid #262C3D;border-radius:6px;padding:6px 8px;font:inherit;font-size:13px}
 .controls input{min-width:190px}
@@ -209,17 +222,44 @@ function solverCard(v) {
     + '</div>';
 }
 
+function ov(label, value, sub) {
+  return '<div class="ov"><span class="ovl">' + label + '</span>'
+    + '<b class="ovv">' + value + '</b>'
+    + (sub ? '<span class="ovs">' + sub + '</span>' : '') + '</div>';
+}
+
+function usdShort(v) {
+  if (v === null || v === undefined) return '—';
+  var a = Math.abs(v);
+  if (a >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+  if (a >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'k';
+  return '$' + v.toFixed(2);
+}
+
+function overviewCard(c) {
+  var o = c.solver.overview;
+  return '<div class="overview">'
+    + ov('AUCTIONS SEEN', o.auctionsSeen.toLocaleString('en-US'), o.resolved.toLocaleString('en-US') + ' resolved')
+    + ov('OBSERVED', o.observedHours.toFixed(1) + 'h', null)
+    + ov('CHAIN', 'ETHEREUM', 'id ' + c.chainId)
+    + ov('ASSETS SEEN', String(o.assetsSeen), null)
+    + ov('BTC', pct(o.btcPct), 'of auctions')
+    + ov('ETH', pct(o.ethPct), 'of auctions')
+    + ov('STABLE&ndash;STABLE', pct(o.stablePct), 'both legs')
+    + ov('OTHER', pct(o.otherPct), 'of auctions')
+    + ov('BIDS WON', o.bidsWon.toLocaleString('en-US'), o.resolved > 0 ? pct(100 * o.bidsWon / o.resolved) + ' of resolved' : null)
+    + ov('MEDIAN EDGE', bps(o.medianMarginBps), 'vs best rival')
+    + ov('SURPLUS DELIVERED', usdShort(o.surplusUsd), 'above user limits')
+    + ov('OUR FEE', usdShort(o.feeUsd), 'at ' + '5 bps')
+    + '</div>';
+}
+
 function solverSection(c) {
   var s = c.solver;
-  var h = '<div class="eyebrow">If we had bid as a solver, sourcing from…</div>';
+  var h = overviewCard(c);
+  h += '<div class="eyebrow">BY VENUE</div>';
   h += '<div class="cards">' + s.venues.map(solverCard).join('') + '</div>';
-  h += '<div class="funnel">'
-    + '<div class="stat"><b>' + s.coverage.tracked + '</b><span>orders tracked</span></div><span class="arrow">&rsaquo;</span>'
-    + '<div class="stat"><b>' + s.coverage.bid + '</b><span>bid on</span></div><span class="arrow">&rsaquo;</span>'
-    + '<div class="stat"><b>' + s.coverage.resolved + '</b><span>auctions resolved</span></div>'
-    + '</div>';
-
-  h += '<h4>Bids — quoted before the winner was known, then re-quoted after</h4>';
+  h += '<div class="eyebrow">TRADES</div>';
   h += '<p class="mut" style="font-size:12px;margin:0 0 8px;line-height:1.7">'
     + '<b>margin</b> — how much more of the trade value we would have given the user than the best rival who bid on <em>this</em> order, in bps. Not against the winning solution\u2019s total, which covers its whole bundle.<br>'
     + '<b>slippage</b> — how much worse our venue\u2019s price was when re-quoted after the result was known. <b>held</b> is yes when that move stayed inside the safety margin we had already priced in.<br>'
@@ -236,11 +276,12 @@ function solverSection(c) {
     + '<option value="held">quote held</option><option value="slipped">quote slipped</option></select>'
     + '<span class="mut" id="fcount"></span></div>';
 
-  var headers = ['ended', 'pair', '$size USD', 'venue', 'result', '$margin', '$slippage', 'held', '$quotes', '$lead s', '$rivals', '$solvers'];
+  var headers = ['TIME', 'PAIR', 'SIDE', '$SIZE', '$SURPLUS', '$EDGE', '$FEE', 'VENUE', 'RESULT', '$MARGIN', '$MOVE', 'HELD', '$QUOTES', '$LEAD', '$RIVALS'];
   h += '<table id="solvertbl"><thead><tr>' + headers.map(function (t, i) {
     var num = t.charAt(0) === '$';
     return '<th class="sortable' + (num ? ' num' : '') + '" onclick="sortSolver(' + i + ')">' + esc(t.replace('$', '')) + '<span class="ind"></span></th>';
   }).join('') + '</tr></thead><tbody>' + s.rows.map(solverRow).join('') + '</tbody></table>';
+  h += '<div class="pager" id="pager"></div>';
   return h;
 }
 
@@ -269,7 +310,6 @@ function solverRow(o) {
     + '<td class="num" data-v="' + o.quoteRounds + '">' + o.quoteRounds + '</td>'
     + '<td class="num" data-v="' + (o.bidLeadMs === null ? -1 : o.bidLeadMs) + '">' + (o.bidLeadMs === null ? '—' : (o.bidLeadMs / 1000).toFixed(0)) + '</td>'
     + '<td class="num" data-v="' + (o.rivalCount === null ? -1 : o.rivalCount) + '">' + (o.rivalCount === null ? '—' : o.rivalCount) + '</td>'
-    + '<td class="num" data-v="' + (o.solverCount === null ? -1 : o.solverCount) + '">' + (o.solverCount === null ? '—' : o.solverCount) + '</td>'
     + '</tr>';
 }
 
@@ -279,6 +319,7 @@ function solverRow(o) {
  *  rebuilt the inputs empty and dropped whatever had been typed — the filters
  *  appeared to do nothing because they were being wiped between keystrokes. */
 var filterState = { q: '', venue: '', result: '', held: '' };
+var pageState = { page: 1, size: 25 };
 var sortState = { col: -1, dir: -1 };
 function sortSolver(col) {
   var tbl = document.getElementById('solvertbl');
@@ -310,10 +351,14 @@ function applyFilters() {
   var fr = document.getElementById('fr'), fh = document.getElementById('fh');
   // Read from the DOM when the user just typed, and remember it so the next
   // render can put it back.
+  var before = filterState.q + '|' + filterState.venue + '|' + filterState.result + '|' + filterState.held;
   if (fq) filterState.q = fq.value;
   if (fv) filterState.venue = fv.value;
   if (fr) filterState.result = fr.value;
   if (fh) filterState.held = fh.value;
+  if (before !== filterState.q + '|' + filterState.venue + '|' + filterState.result + '|' + filterState.held) {
+    pageState.page = 1; // a new filter starts at the beginning, not mid-way through
+  }
   var q = filterState.q, v = filterState.venue, r = filterState.result, hd = filterState.held;
   var tbl = document.getElementById('solvertbl');
   if (!tbl) return;
@@ -329,7 +374,44 @@ function applyFilters() {
     if (ok) shown++;
   }
   var c = document.getElementById('fcount');
-  if (c) c.textContent = shown + ' of ' + rows.length + ' shown';
+  if (c) c.textContent = shown + ' of ' + rows.length + ' match';
+  // Paging sits on top of filtering: a page is a page of what survived the
+  // filter, not of the whole table, or the counts would disagree.
+  paginate();
+}
+
+function paginate() {
+  var tbl = document.getElementById('solvertbl');
+  var pager = document.getElementById('pager');
+  if (!tbl || !pager) return;
+  var visible = [];
+  var rows = tbl.tBodies[0].rows;
+  for (var i = 0; i < rows.length; i++) if (rows[i].style.display !== 'none') visible.push(rows[i]);
+  var pages = Math.max(1, Math.ceil(visible.length / pageState.size));
+  if (pageState.page > pages) pageState.page = pages;
+  var from = (pageState.page - 1) * pageState.size;
+  for (var j = 0; j < visible.length; j++) {
+    visible[j].style.display = j >= from && j < from + pageState.size ? '' : 'none';
+  }
+  var out = '';
+  if (pages > 1) {
+    out += '<button onclick="goPage(' + (pageState.page - 1) + ')"' + (pageState.page === 1 ? ' disabled' : '') + '>&lsaquo;</button>';
+    // Window the buttons so a thousand rows do not render a thousand controls.
+    var lo = Math.max(1, pageState.page - 3), hi = Math.min(pages, pageState.page + 3);
+    if (lo > 1) out += '<button onclick="goPage(1)">1</button><span class="mut">…</span>';
+    for (var pnum = lo; pnum <= hi; pnum++) {
+      out += '<button class="' + (pnum === pageState.page ? 'on' : '') + '" onclick="goPage(' + pnum + ')">' + pnum + '</button>';
+    }
+    if (hi < pages) out += '<span class="mut">…</span><button onclick="goPage(' + pages + ')">' + pages + '</button>';
+    out += '<button onclick="goPage(' + (pageState.page + 1) + ')"' + (pageState.page === pages ? ' disabled' : '') + '>&rsaquo;</button>';
+  }
+  out += '<span class="mut">' + visible.length + ' rows · page ' + pageState.page + ' of ' + pages + '</span>';
+  pager.innerHTML = out;
+}
+
+function goPage(n) {
+  pageState.page = Math.max(1, n);
+  applyFilters();
 }
 
 /** Put the remembered filters back into freshly rendered controls, then apply

@@ -112,6 +112,8 @@ export interface OrderInsert {
   validToMs?: number | null;
   partiallyFillable?: boolean | null;
   orderKind?: 'sell' | 'buy' | null;
+  sellSymbol?: string | null;
+  buySymbol?: string | null;
 }
 
 export interface TickInsert {
@@ -426,8 +428,9 @@ export class Db {
         gas_bump_estimate, gas_price_estimate, allow_partial_fills, allow_multiple_fills,
         deadline_ms, extension_raw, order_struct_json,
         cow_auction_id, cow_solver_count, cow_winner_solver, cow_winner_score, cow_reference_score,
-        limit_sell_amount, limit_buy_amount, valid_to_ms, partially_fillable, order_kind
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        limit_sell_amount, limit_buy_amount, valid_to_ms, partially_fillable, order_kind,
+        sell_symbol, buy_symbol
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (order_hash) DO NOTHING
       RETURNING 1 AS inserted`,
       [
@@ -470,6 +473,8 @@ export class Db {
         o.validToMs ?? null,
         o.partiallyFillable === null || o.partiallyFillable === undefined ? null : o.partiallyFillable ? 1 : 0,
         o.orderKind ?? null,
+        o.sellSymbol ?? null,
+        o.buySymbol ?? null,
       ]
     );
     return rows.length > 0;
@@ -707,13 +712,16 @@ export class Db {
     marginBps: number | null,
     bestRivalScore: bigint | null,
     bestRivalSolver: string | null,
-    rivalCount: number
+    rivalCount: number,
+    usd: { surplus: number | null; edge: number | null; fee: number | null }
   ): void {
     this.enqueue(
       `UPDATE orders SET resolved_at_ms = ?, won = ?, score_margin_bps = ?,
-         best_rival_score = ?, best_rival_solver = ?, rival_count = ?
+         best_rival_score = ?, best_rival_solver = ?, rival_count = ?,
+         surplus_usd = ?, edge_usd = ?, fee_usd = ?
        WHERE order_hash = ?`,
-      [resolvedAtMs, won ? 1 : 0, marginBps, s(bestRivalScore), bestRivalSolver, rivalCount, orderHash]
+      [resolvedAtMs, won ? 1 : 0, marginBps, s(bestRivalScore), bestRivalSolver, rivalCount,
+       usd.surplus, usd.edge, usd.fee, orderHash]
     );
   }
 

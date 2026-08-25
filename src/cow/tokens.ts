@@ -12,6 +12,7 @@ import { config } from '../../config.js';
 import { logError } from '../log.js';
 
 const cache = new Map<string, number | null>();
+const symbolCache = new Map<string, string | null>();
 
 /** eth_call for `decimals()`, selector 0x313ce567. */
 async function decimalsOnChain(token: string): Promise<number | null> {
@@ -37,6 +38,57 @@ async function decimalsOnChain(token: string): Promise<number | null> {
     logError(`decimals() failed for ${token.slice(0, 10)}`, err);
     return null;
   }
+}
+
+/** eth_call for `symbol()`, selector 0x95d89b41.
+ *
+ *  Two encodings in the wild: most tokens return a dynamic string, but several
+ *  older ones (MKR among them) return a raw bytes32. Both are handled, because
+ *  the classification on the overview — is this trade BTC, ETH, or stablecoin —
+ *  reads the symbol, and a token we cannot name lands in "other". */
+async function symbolOnChain(token: string): Promise<string | null> {
+  try {
+    const res = await fetch(config.baseRpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'eth_call',
+        params: [{ to: token, data: '0x95d89b41' }, 'latest'],
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const hex = ((await res.json()) as { result?: string }).result;
+    if (!hex || hex === '0x') return null;
+    const body = hex.slice(2);
+    const decode = (h: string) => Buffer.from(h, 'hex').toString('utf8').replace(/\0+$/, '').trim();
+    // A dynamic string is offset(32) + length(32) + data; bytes32 is just data.
+    if (body.length >= 128) {
+      const len = Number(BigInt('0x' + body.slice(64, 128)));
+      if (len > 0 && len <= 64) return decode(body.slice(128, 128 + len * 2)) || null;
+    }
+    return decode(body) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Symbol from config where we have it, else the chain. Cached for the process. */
+export async function tokenSymbol(token: string): Promise<string | null> {
+  const key = token.toLowerCase();
+  const hit = symbolCache.get(key);
+  if (hit !== undefined) return hit;
+  for (const pair of config.pairs) {
+    for (const side of [pair.base, pair.quote]) {
+      if (side.addresses.some((a) => a.toLowerCase() === key)) {
+        symbolCache.set(key, side.symbol);
+        return side.symbol;
+      }
+    }
+  }
+  const chain = await symbolOnChain(key);
+  symbolCache.set(key, chain);
+  return chain;
 }
 
 /** Decimals from config where we have them, else Bebop's list, else the chain. */

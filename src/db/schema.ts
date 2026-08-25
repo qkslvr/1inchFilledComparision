@@ -82,6 +82,12 @@ export const MIGRATIONS: string[] = [
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS best_rival_score TEXT`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS best_rival_solver TEXT`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS rival_count INTEGER`,
+  // What the trade is worth in money, rather than in bps of something.
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS surplus_usd DOUBLE PRECISION`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS edge_usd DOUBLE PRECISION`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS fee_usd DOUBLE PRECISION`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS sell_symbol TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS buy_symbol TEXT`,
   `ALTER TABLE quote_holds ADD COLUMN IF NOT EXISTS won SMALLINT`,
   `CREATE INDEX IF NOT EXISTS idx_holds_checked ON quote_holds(checked_at_ms DESC)`,
 ];
@@ -175,7 +181,12 @@ CREATE TABLE IF NOT EXISTS orders (
   score_margin_bps   DOUBLE PRECISION,
   best_rival_score   TEXT,
   best_rival_solver  TEXT,
-  rival_count        INTEGER
+  rival_count        INTEGER,
+  surplus_usd        DOUBLE PRECISION,
+  edge_usd           DOUBLE PRECISION,
+  fee_usd            DOUBLE PRECISION,
+  sell_symbol        TEXT,
+  buy_symbol         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS quote_holds (

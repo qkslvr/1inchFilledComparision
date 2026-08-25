@@ -33,7 +33,7 @@ import { walkBuyBase, walkSellBase } from '../kalqix/book.js';
 import { parseAuctionSnapshot, type CowAuctionSnapshot } from './competition.js';
 import { fetchSignedOrder, type CowSignedOrder } from './orders.js';
 import { scoreOf, scoreOfBuy, scoreMarginBps, notionalNative, wouldHaveWon } from './score.js';
-import { tokenDecimals, weiToTokenViaUsd } from './tokens.js';
+import { tokenDecimals, tokenSymbol, weiToTokenViaUsd } from './tokens.js';
 import { bpsOfCeil, ppmOfCeil, quoteForBaseCeil, rescale, toFloat } from '../pricing/units.js';
 import { buildDecidedOutcome, OUTCOME_ORDER_SQL, OUTCOME_TICK_SQL } from '../report/outcome.js';
 import { log, logError } from '../log.js';
@@ -296,6 +296,8 @@ interface Tracked {
   direction: 'SELL_BASE' | 'BUY_BASE' | null;
   sellDecimals: number;
   buyDecimals: number;
+  sellSymbol: string | null;
+  buySymbol: string | null;
   registered: boolean;
   quoteRounds: number;
   /** the last pre-resolution quote per venue — this is what we bid */
@@ -525,6 +527,10 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
     }
   }
 
+  // The venue's own dollar valuation of its output, where it gives one — used to
+  // express our markup in money rather than as a fraction of an opaque amount.
+  const quotes0Usd = best?.q.outUsd6 ? toFloat(best.q.outUsd6, 6) : null;
+
   // The bar is what rivals offered on THIS order, not the winner's score for
   // their whole bundle. A solver bundling five orders out-scores us on volume
   // alone while possibly offering this user less, and comparing against that
@@ -556,7 +562,20 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
     hadBid && bestRivalScore !== null && notional !== null
       ? scoreMarginBps(ourScore!, bestRivalScore, notional)
       : null;
-  db.recordResolution(t.order.uid, now, won, margin, bestRivalScore, bestRivalSolver, proposals.length);
+  // Scores are native wei, so the reference ETH price turns them into money.
+  // This is what the trade is actually worth, rather than bps of something.
+  const ethUsd6 = refPrices.latestMid.get(config.nativeTicker)?.mid;
+  const toUsd = (wei: bigint | null): number | null =>
+    wei === null || ethUsd6 === undefined ? null : toFloat(wei, 18) * toFloat(ethUsd6, 6);
+  const feeUsd =
+    best && quotes0Usd !== null && best.q.out > 0n
+      ? (toFloat(best.q.fee, t.buyDecimals) / toFloat(best.q.out, t.buyDecimals)) * quotes0Usd
+      : null;
+  db.recordResolution(t.order.uid, now, won, margin, bestRivalScore, bestRivalSolver, proposals.length, {
+    surplus: toUsd(ourScore),
+    edge: ourScore !== null && bestRivalScore !== null ? toUsd(ourScore - bestRivalScore) : null,
+    fee: feeUsd,
+  });
   db.setTerminal(t.order.uid, 'filled', null, t.order.sellAmount, settledBuyAmount);
   await db.all(`UPDATE orders SET terminal_at_ms = ? WHERE order_hash = ?`, [now, t.order.uid]);
   await db.all(
@@ -620,8 +639,14 @@ async function consider(uid: string): Promise<void> {
   // Most of the solvable set is long-dated limit orders resting far from market.
   // Quoting them all would flood the database for no signal, so an order has to
   // be within reach of a price we can actually source before we track it.
+  const [sellSymbol, buySymbol] = await Promise.all([
+    tokenSymbol(order.sellToken),
+    tokenSymbol(order.buyToken),
+  ]);
   const t: Tracked = {
     order,
+    sellSymbol,
+    buySymbol,
     pair: match ? match.pair : null,
     direction: match ? match.direction : null,
     sellDecimals,
@@ -659,7 +684,7 @@ async function consider(uid: string): Promise<void> {
     takingAmount: order.buyAmount,
     remainingMaker: order.sellAmount,
     makerAddress: order.owner,
-    pair: match ? match.pair.ticker : `${tokenLabel(order.sellToken)}/${tokenLabel(order.buyToken)}`,
+    pair: match ? match.pair.ticker : `${sellSymbol ?? tokenLabel(order.sellToken)}/${buySymbol ?? tokenLabel(order.buyToken)}`,
     direction: match ? match.direction : null,
     hedgeAssetKind: null,
     eligible: true,
@@ -682,6 +707,8 @@ async function consider(uid: string): Promise<void> {
     validToMs: order.validToMs || null,
     partiallyFillable: order.partiallyFillable,
     orderKind: order.kind,
+    sellSymbol,
+    buySymbol,
   });
   t.registered = true;
   tracked.set(uid, t);
