@@ -163,6 +163,10 @@ td.neg{color:#F87171}
 .controls input,.controls select{background:#141824;color:#E6E9F2;border:1px solid #262C3D;border-radius:6px;padding:6px 8px;font:inherit;font-size:13px}
 .controls input{min-width:190px}
 th.sortable{cursor:pointer;user-select:none}
+tr.grp th{font-size:9.5px;letter-spacing:.12em;color:#6C7590;font-weight:700;border-bottom:1px solid #262C3D;padding-bottom:4px;text-align:left}
+tr.grp th+th{border-left:1px solid #262C3D;padding-left:8px}
+.card .sub{font-size:10px;letter-spacing:.09em;color:#6C7590;font-weight:600;margin-bottom:8px}
+.rowk span:first-child{font-size:10px;letter-spacing:.07em;font-weight:600}
 th.sortable:hover{color:#8B9CF0}
 .rowk{display:flex;justify-content:space-between;font-size:12px;color:#9AA3B8;margin-top:4px}
 .rowk b{color:#E6E9F2}
@@ -203,54 +207,25 @@ function bps(v) { return v === null || v === undefined ? '—' : (v > 0 ? '+' : 
 
 function solverCard(v) {
   var cls = v.winRatePct === null ? 'mut' : v.winRatePct >= 50 ? 'win' : '';
+  function kv(label, value, extra) {
+    return '<div class="rowk"><span>' + label + '</span><b>' + value
+      + (extra ? '<span class="mut" style="font-weight:400"> ' + extra + '</span>' : '') + '</b></div>';
+  }
   return '<div class="card">'
     + '<h3>' + esc(v.name) + '</h3>'
     + '<div class="big ' + cls + '">' + pct(v.winRatePct) + '</div>'
-    + '<div class="sub">would have won ' + v.wins + ' of ' + v.bids + ' bids'
-    + (v.noBid ? ' &middot; ' + v.noBid + ' unbiddable' : '') + '</div>'
-    + '<div class="rowk" title="Win rate counting only orders where a rival actually offered the user some surplus. Beating a rival who delivered exactly the limit price and nothing more is not evidence we can beat a real solver."><span>vs a rival who bid properly</span><b>'
-    + pct(v.contestedWinRatePct) + '<span class="mut" style="font-weight:400"> (' + v.contestedWins + '/' + v.contested + ')</span></b></div>'
-    + '<div class="rowk" title="Of the auctions we would have won, how often the venue price was still good enough when we re-quoted after the result was known."><span>price still there after winning</span><b>' + pct(v.heldPct) + '</b></div>'
-    + '<div class="rowk" title="The same re-quote on auctions we lost. A control: if the price holds less often when we win, we were winning because our quote was stale."><span>&hellip;and after losing (control)</span><b>' + pct(v.heldPctLost) + '</b></div>'
-    + '<div class="rowk" title="How much more of the trade value we would have given the user than the best rival bidding on that same order. NEGATIVE means we were behind."><span>median edge vs best rival</span><b>' + bps(v.medianMarginBps) + '</b></div>'
-    + '<div class="rowk" title="How much worse our venue price was on the re-quote, in bps of our bid. Positive means it moved against us."><span>median price move after</span><b>' + bps(v.medianSlippageBps) + '</b></div>'
-    // Winning an auction you cannot honour is not a win, so the two rates are
-    // shown multiplied as well as separately.
-    + '<div class="rowk eff" title="Win rate multiplied by how often the price held. Winning an auction you cannot honour is not a win."><span>effective win rate</span><b>'
-    + (v.winRatePct === null || v.heldPct === null ? '—' : (v.winRatePct * v.heldPct / 100).toFixed(0) + '%')
+    + '<div class="sub">WIN RATE</div>'
+    + kv('BIDS', String(v.bids), null)
+    + kv('WON', String(v.wins), null)
+    + kv('UNBIDDABLE', String(v.noBid), null)
+    + kv('CONTESTED', pct(v.contestedWinRatePct), v.contestedWins + '/' + v.contested)
+    + kv('HELD &middot; WON', pct(v.heldPct), null)
+    + kv('HELD &middot; LOST', pct(v.heldPctLost), null)
+    + kv('MED EDGE', bps(v.medianMarginBps), null)
+    + kv('MED MOVE', bps(v.medianSlippageBps), null)
+    + '<div class="rowk eff"><span>EFFECTIVE</span><b>'
+    + (v.winRatePct === null || v.heldPct === null ? '&mdash;' : (v.winRatePct * v.heldPct / 100).toFixed(0) + '%')
     + '</b></div>'
-    + '</div>';
-}
-
-function ov(label, value, sub) {
-  return '<div class="ov"><span class="ovl">' + label + '</span>'
-    + '<b class="ovv">' + value + '</b>'
-    + (sub ? '<span class="ovs">' + sub + '</span>' : '') + '</div>';
-}
-
-function usdShort(v) {
-  if (v === null || v === undefined) return '—';
-  var a = Math.abs(v);
-  if (a >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
-  if (a >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'k';
-  return '$' + v.toFixed(2);
-}
-
-function overviewCard(c) {
-  var o = c.solver.overview;
-  return '<div class="overview">'
-    + ov('AUCTIONS SEEN', o.auctionsSeen.toLocaleString('en-US'), o.resolved.toLocaleString('en-US') + ' resolved')
-    + ov('OBSERVED', o.observedHours.toFixed(1) + 'h', null)
-    + ov('CHAIN', 'ETHEREUM', 'id ' + c.chainId)
-    + ov('ASSETS SEEN', String(o.assetsSeen), o.classified < o.auctionsSeen ? 'classified ' + o.classified : null)
-    + ov('BTC', pct(o.btcPct), 'of auctions')
-    + ov('ETH', pct(o.ethPct), 'of auctions')
-    + ov('STABLE&ndash;STABLE', pct(o.stablePct), 'both legs')
-    + ov('OTHER', pct(o.otherPct), 'of auctions')
-    + ov('BIDS WON', o.bidsWon.toLocaleString('en-US'), o.resolved > 0 ? pct(100 * o.bidsWon / o.resolved) + ' of resolved' : null)
-    + ov('MEDIAN EDGE', bps(o.medianMarginBps), 'vs best rival')
-    + ov('SURPLUS DELIVERED', usdShort(o.surplusUsd), 'above user limits')
-    + ov('OUR FEE', usdShort(o.feeUsd), 'at ' + '5 bps')
     + '</div>';
 }
 
@@ -276,8 +251,13 @@ function solverSection(c) {
     + '<option value="held">quote held</option><option value="slipped">quote slipped</option></select>'
     + '<span class="mut" id="fcount"></span></div>';
 
-  var headers = ['TIME', 'PAIR', 'SIDE', '$SIZE', '$SURPLUS', '$EDGE', '$FEE', 'VENUE', 'RESULT', '$MARGIN', '$MOVE', 'HELD', '$QUOTES', '$LEAD', '$RIVALS'];
-  h += '<table id="solvertbl"><thead><tr>' + headers.map(function (t, i) {
+  var headers = ['TIME', 'PAIR', 'SIDE', '$SIZE', '$SURPLUS', '$EDGE', '$FEE', 'VENUE', 'RIVALS', 'RESULT', '$MARGIN', 'HELD', '$MOVE', '$QUOTES', '$LEAD'];
+  // A grouping row above the columns, so it reads as three blocks — the trade,
+  // what we bid, how it turned out — instead of fifteen equal columns.
+  h += '<table id="solvertbl"><thead><tr class="grp">'
+    + '<th colspan="4">TRADE</th><th colspan="3">OUR BID ($)</th>'
+    + '<th colspan="2">SOURCE</th><th colspan="3">OUTCOME</th><th colspan="3">QUALITY</th></tr><tr>'
+    + headers.map(function (t, i) {
     var num = t.charAt(0) === '$';
     return '<th class="sortable' + (num ? ' num' : '') + '" onclick="sortSolver(' + i + ')">' + esc(t.replace('$', '')) + '<span class="ind"></span></th>';
   }).join('') + '</tr></thead><tbody>' + s.rows.map(solverRow).join('') + '</tbody></table>';

@@ -417,7 +417,7 @@ const isEth = (s: string | null) => {
 };
 
 async function collectSolver(db: Db) {
-  const [venueRows, holdRows, rows, coverage, classRows, assetRows] = await Promise.all([
+  const [venueRows, holdRows, rows, coverage, classRows, assetRows, holdTotals] = await Promise.all([
     // A row whose score was zero never carried a bid, so it is neither a win
     // nor a loss and has no margin. Counting it as a bid understates every
     // win rate; letting its -10000 bps into the median destroys it.
@@ -452,6 +452,8 @@ async function collectSolver(db: Db) {
                    count(*) FILTER (WHERE won = 1) AS won,
                    sum(surplus_usd) AS surplus_usd, sum(fee_usd) AS fee_usd,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY score_margin_bps) AS median_margin_bps,
+                   sum(size_usd) AS volume_usd,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY size_usd) AS median_size_usd,
                    min(received_at_ms) AS first_ms, max(received_at_ms) AS last_ms
             FROM orders`),
     db.all(`SELECT sell_symbol, buy_symbol, count(*) AS n FROM orders
@@ -460,6 +462,10 @@ async function collectSolver(db: Db) {
     db.get(`SELECT count(DISTINCT sym) AS assets FROM (
               SELECT sell_symbol AS sym FROM orders WHERE sell_symbol IS NOT NULL
               UNION SELECT buy_symbol FROM orders WHERE buy_symbol IS NOT NULL) u`),
+    db.get(`SELECT count(*) AS checks, sum(held) AS held,
+                   count(*) FILTER (WHERE won = 1) AS won_checks,
+                   sum(held) FILTER (WHERE won = 1) AS won_held
+            FROM quote_holds`),
   ]);
 
   // One pass over the pair counts, so each order lands in exactly one bucket.
@@ -544,6 +550,21 @@ async function collectSolver(db: Db) {
       stablePct: share(stable),
       otherPct: share(other),
       classified,
+      volumeUsd: coverage?.volume_usd === null || coverage?.volume_usd === undefined ? null : Number(coverage.volume_usd),
+      medianSizeUsd:
+        coverage?.median_size_usd === null || coverage?.median_size_usd === undefined
+          ? null
+          : Number(coverage.median_size_usd),
+      // Every re-quote, both arms. The won-only figure is the one that carries
+      // money; the overall rate is the baseline it should be read against.
+      heldPct:
+        Number(holdTotals?.checks ?? 0) > 0
+          ? (100 * Number(holdTotals?.held ?? 0)) / Number(holdTotals!.checks)
+          : null,
+      heldWonPct:
+        Number(holdTotals?.won_checks ?? 0) > 0
+          ? (100 * Number(holdTotals?.won_held ?? 0)) / Number(holdTotals!.won_checks)
+          : null,
       medianMarginBps:
         coverage?.median_margin_bps === null || coverage?.median_margin_bps === undefined
           ? null
