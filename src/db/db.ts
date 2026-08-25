@@ -713,15 +713,28 @@ export class Db {
     bestRivalScore: bigint | null,
     bestRivalSolver: string | null,
     rivalCount: number,
-    usd: { surplus: number | null; edge: number | null; fee: number | null }
+    usd: { surplus: number | null; edge: number | null; fee: number | null },
+    target?: {
+      bid: boolean;
+      won: boolean;
+      score: bigint | null;
+      rank: number | null;
+      beat: boolean | null;
+      vsBps: number | null;
+    }
   ): void {
     this.enqueue(
       `UPDATE orders SET resolved_at_ms = ?, won = ?, score_margin_bps = ?,
          best_rival_score = ?, best_rival_solver = ?, rival_count = ?,
-         surplus_usd = ?, edge_usd = ?, fee_usd = ?
+         surplus_usd = ?, edge_usd = ?, fee_usd = ?,
+         target_bid = ?, target_won = ?, target_score = ?, target_rank = ?,
+         beat_target = ?, vs_target_bps = ?
        WHERE order_hash = ?`,
       [resolvedAtMs, won ? 1 : 0, marginBps, s(bestRivalScore), bestRivalSolver, rivalCount,
-       usd.surplus, usd.edge, usd.fee, orderHash]
+       usd.surplus, usd.edge, usd.fee,
+       target?.bid ?? null, target?.won ?? null, s(target?.score ?? null), target?.rank ?? null,
+       target?.beat ?? null, target?.vsBps ?? null,
+       orderHash]
     );
   }
 

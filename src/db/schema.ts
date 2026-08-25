@@ -88,6 +88,14 @@ export const MIGRATIONS: string[] = [
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS fee_usd DOUBLE PRECISION`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS sell_symbol TEXT`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS buy_symbol TEXT`,
+  // Cicada: one named solver's own bid on this order, which is the bar that
+  // dataset measures against instead of the auction winner's.
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS target_bid BOOLEAN`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS target_won BOOLEAN`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS target_score TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS target_rank INTEGER`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS beat_target BOOLEAN`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS vs_target_bps DOUBLE PRECISION`,
   `ALTER TABLE quote_holds ADD COLUMN IF NOT EXISTS won SMALLINT`,
   `CREATE INDEX IF NOT EXISTS idx_holds_checked ON quote_holds(checked_at_ms DESC)`,
 ];
@@ -186,7 +194,13 @@ CREATE TABLE IF NOT EXISTS orders (
   edge_usd           DOUBLE PRECISION,
   fee_usd            DOUBLE PRECISION,
   sell_symbol        TEXT,
-  buy_symbol         TEXT
+  buy_symbol         TEXT,
+  target_bid         BOOLEAN,
+  target_won         BOOLEAN,
+  target_score       TEXT,
+  target_rank        INTEGER,
+  beat_target        BOOLEAN,
+  vs_target_bps      DOUBLE PRECISION
 );
 
 CREATE TABLE IF NOT EXISTS quote_holds (

@@ -46,6 +46,14 @@ if ! pgrep -f "tsx src/cow/solve[r].ts" > /dev/null 2>&1; then
   sleep 2
 fi
 
+# Cicada: the same simulation pointed at Arbitrum and at one named solver.
+# Separate schema and separate process, so the Ethereum dataset is unaffected.
+if ! pgrep -f "CHAIN=cicad[a]" > /dev/null 2>&1; then
+  echo "$(date -Is) ensure: cicada not running, starting" >> logs/ensure.log
+  setsid nohup env CHAIN=cicada npx tsx src/cow/solver.ts >> logs/collect-cicada.log 2>&1 < /dev/null &
+  sleep 2
+fi
+
 # Fusion collectors, off since 2026-08-20. The project now only follows CoW Swap
 # on Ethereum, and the two 1inch collectors were the entire 1inch spend plus
 # ~10 req/s of KyberSwap traffic against a 3 req/s budget — which is why Kyber

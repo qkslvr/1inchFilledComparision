@@ -39,7 +39,7 @@ import { buildDecidedOutcome, OUTCOME_ORDER_SQL, OUTCOME_TICK_SQL } from '../rep
 import { log, logError } from '../log.js';
 
 const SDK_VERSION = 'cow-solver-1';
-const LATEST = 'https://api.cow.fi/mainnet/api/v2/solver_competition/latest';
+const LATEST = `${config.cow.apiBase}/${config.cow.chainSlug}/api/v2/solver_competition/latest`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // KalqiX and Bebop are in-memory and free; only Kyber costs a request, so it is
@@ -562,6 +562,38 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
     hadBid && bestRivalScore !== null && notional !== null
       ? scoreMarginBps(ourScore!, bestRivalScore, notional)
       : null;
+
+  // --- the named solver we are pitching, where one is configured -------------
+  //
+  // Their own proposal is the bar, not the auction winner's. "We would have won
+  // this auction" is a claim about the whole field and depends on how everyone
+  // else would have reacted; "our price beat the one you actually submitted, on
+  // this order" is a claim about them alone, and it is the one that can be
+  // checked from the record.
+  const targetAddr = config.cow.targetSolver;
+  let target:
+    | { bid: boolean; won: boolean; score: bigint | null; rank: number | null; beat: boolean | null; vsBps: number | null }
+    | undefined;
+  if (targetAddr) {
+    const theirs = proposals.find((p) => p.solver === targetAddr);
+    if (!theirs) {
+      target = { bid: false, won: false, score: null, rank: null, beat: null, vsBps: null };
+    } else {
+      const theirScore = rivalScore(t, theirs, prices);
+      target = {
+        bid: true,
+        won: theirs.isWinner,
+        score: theirScore,
+        rank: theirs.ranking,
+        beat: ourScore !== null && theirScore !== null ? ourScore > theirScore : null,
+        vsBps:
+          ourScore !== null && theirScore !== null && notional !== null
+            ? scoreMarginBps(ourScore, theirScore, notional)
+            : null,
+      };
+    }
+  }
+
   // Scores are native wei, so the reference ETH price turns them into money.
   // This is what the trade is actually worth, rather than bps of something.
   const ethUsd6 = refPrices.latestMid.get(config.nativeTicker)?.mid;
@@ -571,11 +603,15 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
     best && quotes0Usd !== null && best.q.out > 0n
       ? (toFloat(best.q.fee, t.buyDecimals) / toFloat(best.q.out, t.buyDecimals)) * quotes0Usd
       : null;
-  db.recordResolution(t.order.uid, now, won, margin, bestRivalScore, bestRivalSolver, proposals.length, {
-    surplus: toUsd(ourScore),
-    edge: ourScore !== null && bestRivalScore !== null ? toUsd(ourScore - bestRivalScore) : null,
-    fee: feeUsd,
-  });
+  db.recordResolution(
+    t.order.uid, now, won, margin, bestRivalScore, bestRivalSolver, proposals.length,
+    {
+      surplus: toUsd(ourScore),
+      edge: ourScore !== null && bestRivalScore !== null ? toUsd(ourScore - bestRivalScore) : null,
+      fee: feeUsd,
+    },
+    target
+  );
   db.setTerminal(t.order.uid, 'filled', null, t.order.sellAmount, settledBuyAmount);
   await db.all(`UPDATE orders SET terminal_at_ms = ? WHERE order_hash = ?`, [now, t.order.uid]);
   await db.all(

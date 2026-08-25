@@ -3,9 +3,10 @@
  *  The competition feed reports what the winner *executed*, never the limit that
  *  had to be beaten — so surplus, and therefore any score, is uncomputable from
  *  it alone. This endpoint is public and supplies the missing half. */
+import { config } from '../../config.js';
 import { logError } from '../log.js';
 
-const ORDERS = 'https://api.cow.fi/mainnet/api/v1/orders';
+const ORDERS = `${config.cow.apiBase}/${config.cow.chainSlug}/api/v1/orders`;
 
 export interface CowSignedOrder {
   uid: string;

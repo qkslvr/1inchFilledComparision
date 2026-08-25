@@ -417,7 +417,7 @@ const isEth = (s: string | null) => {
 };
 
 async function collectSolver(db: Db) {
-  const [venueRows, holdRows, rows, coverage, classRows, assetRows, holdTotals] = await Promise.all([
+  const [venueRows, holdRows, rows, coverage, classRows, assetRows, holdTotals, target] = await Promise.all([
     // A row whose score was zero never carried a bid, so it is neither a win
     // nor a loss and has no margin. Counting it as a bid understates every
     // win rate; letting its -10000 bps into the median destroys it.
@@ -466,6 +466,15 @@ async function collectSolver(db: Db) {
                    count(*) FILTER (WHERE won = 1) AS won_checks,
                    sum(held) FILTER (WHERE won = 1) AS won_held
             FROM quote_holds`),
+    // Cicada only: how we compare with the one solver being pitched.
+    db.get(`SELECT count(*) FILTER (WHERE target_bid) AS they_bid,
+                   count(*) FILTER (WHERE target_won) AS they_won,
+                   count(*) FILTER (WHERE beat_target) AS we_beat,
+                   count(*) FILTER (WHERE target_bid AND NOT target_won) AS they_lost,
+                   count(*) FILTER (WHERE target_bid AND NOT target_won AND beat_target) AS we_beat_on_their_losses,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY vs_target_bps) AS median_vs_bps,
+                   sum(edge_usd) FILTER (WHERE beat_target) AS edge_usd
+            FROM orders WHERE resolved_at_ms IS NOT NULL`),
   ]);
 
   // One pass over the pair counts, so each order lands in exactly one bucket.
@@ -534,8 +543,31 @@ async function collectSolver(db: Db) {
     };
   });
 
+  const targetStats =
+    Number(target?.they_bid ?? 0) > 0 || Number(target?.we_beat ?? 0) > 0
+      ? {
+          theyBid: Number(target?.they_bid ?? 0),
+          theyWon: Number(target?.they_won ?? 0),
+          theyLost: Number(target?.they_lost ?? 0),
+          weBeat: Number(target?.we_beat ?? 0),
+          // The headline for a pitch: auctions they lost where our price would
+          // have been better than the one they submitted.
+          weBeatOnTheirLosses: Number(target?.we_beat_on_their_losses ?? 0),
+          beatPct:
+            Number(target?.they_bid ?? 0) > 0
+              ? (100 * Number(target?.we_beat ?? 0)) / Number(target!.they_bid)
+              : null,
+          medianVsBps:
+            target?.median_vs_bps === null || target?.median_vs_bps === undefined
+              ? null
+              : Number(target.median_vs_bps),
+          edgeUsd: target?.edge_usd === null || target?.edge_usd === undefined ? null : Number(target.edge_usd),
+        }
+      : null;
+
   return {
     venues,
+    target: targetStats,
     overview: {
       auctionsSeen: Number(coverage?.tracked ?? 0),
       resolved: Number(coverage?.resolved ?? 0),

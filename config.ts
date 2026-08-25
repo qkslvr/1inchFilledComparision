@@ -52,6 +52,13 @@ interface ChainProfile {
    *  chain, so any chain with two collectors must put both behind the relay.
    *  Defaults to holding the socket directly. */
   bebopMode?: 'stream' | 'relay';
+  /** A specific solver to measure ourselves against, rather than the field.
+   *
+   *  The cicada dataset exists to pitch one solver: for each order they bid on,
+   *  could our liquidity have beaten the price *they* proposed? That is a
+   *  different question from "would we have won", and it needs their own bid as
+   *  the bar rather than the auction winner's. */
+  targetSolver?: string;
   /** PancakeSwap V3 QuoterV2, on chains where it is deployed. */
   pancakeQuoter?: string;
   /** PancakeSwap V3 fee tiers, in hundredths of a bip. */
@@ -306,11 +313,82 @@ const profiles: Record<string, ChainProfile> = {
     ],
 
   },
+  cicada: {
+    chainId: 42161,
+    label: 'Cicada — Arbitrum solver',
+    schemaOverride: 'cicada_42161',
+    orderSource: 'cow-solver',
+    targetSolver: '0x4cdaf5df3afe11f1726b8975a925245ad14e9f3b',
+    // Above the ~15s structural floor, so it separates clean samples from
+    // lagged ones. At 30s it sat below the old 41s floor and flagged every
+    // single tick, which made the signal useless.
+    quoteLagToleranceMs: 25_000,
+    wethAddress: WETH_ETHEREUM,
+    pairs: [
+      {
+        ticker: 'ETH_USDC',
+        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
+        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ETHEREUM] },
+      },
+      {
+        ticker: 'cbBTC_USDC',
+        base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
+        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ETHEREUM] },
+      },
+      // KalqiX lists only ETH/USDC and cbBTC/USDC, but a dollar is a dollar for
+      // our purposes, so the USDT and DAI pairs are priced off the same books.
+      // Note the decimals: DAI is 18dp against USDC's 6dp, which rescaleBook
+      // handles — get that wrong and every DAI figure is out by 10^12.
+      {
+        ticker: 'ETH_USDT',
+        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
+        quote: { symbol: 'USDT', decimals: 6, addresses: [USDT_ETHEREUM] },
+      },
+      {
+        ticker: 'ETH_DAI',
+        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
+        quote: { symbol: 'DAI', decimals: 18, addresses: [DAI_ETHEREUM] },
+      },
+      {
+        ticker: 'WBTC_USDT',
+        base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
+        quote: { symbol: 'USDT', decimals: 6, addresses: [USDT_ETHEREUM] },
+      },
+      {
+        // crypto-crypto, so there is no stable leg and its USD notional is null
+        ticker: 'WBTC_ETH',
+        base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
+        quote: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM] },
+      },
+    ],
+    rpcEnvVar: 'ARB_RPC_URL',
+    rpcUrlDefault: 'https://arb1.arbitrum.io/rpc',
+    dashPortDefault: 8792,
+    kyberChainSlug: 'arbitrum',
+    cowChainSlug: 'arbitrum_one',
+    // Shares chain 1 with cowswapResolver, and the key allows one socket per
+    // chain: both read from the relay so neither can lock the other out.
+    bebopChainSlug: 'arbitrum',
+    bebopMode: 'stream',
+    venues: ['kyber', 'bebop'],
+    nativeTicker: 'ETH_USDC',
+    nativeSymbol: 'ETH',
+    stableSymbol: 'USDC',
+    kyberOnlySkipPairs: [],
+    reportCaveats: [
+      'This measures one Arbitrum solver, 0x4cdaf5df…, rather than the field. For every order they bid on we ask whether our liquidity could have beaten the price they themselves proposed — so the bar is their bid, not the auction winner\'s.',
+      'KalqiX has no Arbitrum market and Bebop lists only thirteen tokens there, so this is effectively a KyberSwap comparison. The solver trades mostly USDC and WETH, which both venues do cover.',
+      'We never submit a solution. A win here means our price beat theirs on the same order, not that the auction would have resolved differently once other solvers responded.',
+    ],
+
+
+  },
 };
 profiles.eth = profiles.ethereum!;
 profiles.bnb = profiles.bsc!;
 profiles.cowswapresolver = profiles.cowswapResolver!;
 profiles.cowswapsolver = profiles.cowswapSolver!;
+profiles.cicada = profiles.cicada!;
 profiles.cow = profiles.cowswapResolver!;
 
 // `||`, not `??`: .env.example ships CHAIN= as an empty placeholder, and the
@@ -420,7 +498,8 @@ export const config = {
   // and needs no key. Note /auction — the open-order set — is solver-only (403).
   cow: {
     apiBase: 'https://api.cow.fi',
-    chainSlug: profile.cowChainSlug ?? null,
+    chainSlug: profile.cowChainSlug ?? 'mainnet',
+    targetSolver: profile.targetSolver?.toLowerCase() ?? null,
     /** quotes need a from/receiver to be returned; nothing is signed or sent */
     quoteFrom: '0x0000000000000000000000000000000000000001',
     feeBps: 5n,
@@ -564,7 +643,7 @@ export interface ResolvedChain {
  *  some venue have paid more, after the fact — that the solver subsumes by
  *  asking whether we would actually have won. Their profiles and their data are
  *  kept; add a key back here to serve one again. */
-export const allChains: ResolvedChain[] = ['cowswapSolver'].map((key) => {
+export const allChains: ResolvedChain[] = ['cowswapSolver', 'cicada'].map((key) => {
   const p = profiles[key]!;
   return {
     key,

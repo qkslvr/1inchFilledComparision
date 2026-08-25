@@ -25,8 +25,8 @@ import { config } from '../../config.js';
 import { logError } from '../log.js';
 import { blockTimestampMs, type CowTrade } from './settlements.js';
 
-const LATEST = 'https://api.cow.fi/mainnet/api/v2/solver_competition/latest';
-const BY_TX = 'https://api.cow.fi/mainnet/api/v2/solver_competition/by_tx_hash';
+const LATEST = `${config.cow.apiBase}/${config.cow.chainSlug}/api/v2/solver_competition/latest`;
+const BY_TX = `${config.cow.apiBase}/${config.cow.chainSlug}/api/v2/solver_competition/by_tx_hash`;
 
 /** What the auction cost us to win, and who we would have had to beat. */
 export interface CowCompetition {
@@ -96,7 +96,7 @@ export interface CowAuctionSnapshot {
    *  each solution *does* report per order is the buyAmount it would deliver,
    *  and that is directly comparable: scored against the same limit and the same
    *  auction price, it is what a rival offered on the order we bid on. */
-  proposalsByOrder: Map<string, Array<{ solver: string; buyAmount: bigint; sellAmount: bigint; isWinner: boolean }>>;
+  proposalsByOrder: Map<string, Array<{ solver: string; buyAmount: bigint; sellAmount: bigint; isWinner: boolean; ranking: number | null }>>;
 }
 
 export function parseAuctionSnapshot(raw: RawCompetition): CowAuctionSnapshot | null {
@@ -110,7 +110,7 @@ export function parseAuctionSnapshot(raw: RawCompetition): CowAuctionSnapshot | 
       // a price we cannot parse is simply a token we cannot score
     }
   }
-  const proposalsByOrder = new Map<string, Array<{ solver: string; buyAmount: bigint; sellAmount: bigint; isWinner: boolean }>>();
+  const proposalsByOrder = new Map<string, Array<{ solver: string; buyAmount: bigint; sellAmount: bigint; isWinner: boolean; ranking: number | null }>>();
   for (const sol of raw.solutions ?? []) {
     for (const o of sol.orders ?? []) {
       if (!o.id || !o.buyAmount || !o.sellAmount) continue;
@@ -121,6 +121,7 @@ export function parseAuctionSnapshot(raw: RawCompetition): CowAuctionSnapshot | 
         // The spend side, which is where a buy order's surplus lives.
         sellAmount: BigInt(o.sellAmount),
         isWinner: sol.isWinner === true,
+        ranking: typeof sol.ranking === 'number' ? sol.ranking : null,
       });
       proposalsByOrder.set(o.id, list);
     }

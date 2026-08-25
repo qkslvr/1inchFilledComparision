@@ -232,6 +232,21 @@ function solverCard(v) {
 function solverSection(c) {
   var s = c.solver;
   var h = overviewCard(c);
+  // Where a named solver is being measured, that comparison leads — it is the
+  // reason the dataset exists, and the venue cards are supporting detail.
+  if (c.solver.target) {
+    var t = c.solver.target;
+    h += '<div class="eyebrow">VS TARGET SOLVER</div>';
+    h += '<div class="overview">'
+      + ov('THEY BID ON', String(t.theyBid), 'auctions')
+      + ov('THEY WON', String(t.theyWon), t.theyBid > 0 ? pct(100 * t.theyWon / t.theyBid) : null)
+      + ov('THEY LOST', String(t.theyLost), null)
+      + ov('WE BEAT THEIR PRICE', String(t.weBeat), pct(t.beatPct))
+      + ov('&hellip;ON AUCTIONS THEY LOST', String(t.weBeatOnTheirLosses), 'would have flipped')
+      + ov('MEDIAN VS THEM', bps(t.medianVsBps), 'of trade value')
+      + ov('EDGE WHERE WE BEAT', usdShort(t.edgeUsd), null)
+      + '</div>';
+  }
   h += '<div class="eyebrow">BY VENUE</div>';
   h += '<div class="cards">' + s.venues.map(solverCard).join('') + '</div>';
   h += '<div class="eyebrow">TRADES</div>';
