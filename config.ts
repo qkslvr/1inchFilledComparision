@@ -535,6 +535,13 @@ export const config = {
     /** Random delay before the first poll, so two processes started together by
      *  the supervisor do not line up and collide on every tick thereafter. */
     pollJitterMs: 7_000,
+    /** Minimum gap between CoW polls by ANY process on this host.
+     *
+     *  Measured: roughly one request per six seconds survives, and the bucket is
+     *  shared across chains. Eight gives a little headroom. Each dataset still
+     *  polls on its own 15s timer; this only stops the two of them landing
+     *  together, which is what starved cicada completely. */
+    sharedPollMinIntervalMs: 8_000,
     /** How long to stop polling after a 429, rather than retrying into it. */
     rateLimitBackoffMs: 30_000,
     /** How long the settlement backstop waits before claiming a trade.

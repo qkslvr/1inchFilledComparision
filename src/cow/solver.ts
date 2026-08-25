@@ -34,6 +34,7 @@ import { parseAuctionSnapshot, type CowAuctionSnapshot } from './competition.js'
 import { fetchSignedOrder, type CowSignedOrder } from './orders.js';
 import { scoreOf, scoreOfBuy, scoreMarginBps, notionalNative, wouldHaveWon } from './score.js';
 import { tokenDecimals, tokenSymbol, weiToTokenViaUsd } from './tokens.js';
+import { takePollSlot } from './pollgate.js';
 import { bpsOfCeil, ppmOfCeil, quoteForBaseCeil, rescale, toFloat } from '../pricing/units.js';
 import { buildDecidedOutcome, OUTCOME_ORDER_SQL, OUTCOME_TICK_SQL } from '../report/outcome.js';
 import { log, logError } from '../log.js';
@@ -752,7 +753,16 @@ async function consider(uid: string): Promise<void> {
   await quoteRound(t);
 }
 
+let slotDenied = 0;
+
 async function pollAuction(): Promise<void> {
+  // Every process on this host shares one CoW rate limit, so they take turns
+  // rather than compete. Skipping a tick costs nothing — auctions advance far
+  // slower than we poll — whereas colliding costs a 429 and a 30s penalty.
+  if (!takePollSlot()) {
+    slotDenied++;
+    return;
+  }
   const res = await fetch(LATEST, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) });
   if (res.status === 429) {
     // Sit out a cycle rather than retrying into the wall every 6s, which is what
@@ -845,6 +855,7 @@ const status = setInterval(() => {
       `new=${rejected.newUids} rejected(lookup=${rejected.lookup} notOpen=${rejected.notOpen} ` +
       `expired=${rejected.expired} noDecimals=${rejected.noDecimals} noQuote=${rejected.noQuote} tooFar=${rejected.tooFar}) ` +
       `kyberBudget=${kyberBudget.available}/${config.kyber.budgetPerWindow} (denied ${kyberBudget.denied}) ` +
+      `pollSlotSkips=${slotDenied} ` +
       `bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'} ` +
       (db.storagePressure ? ` STORAGE-PRESSURE(${db.droppedTicks} dropped)` : '')
   );
