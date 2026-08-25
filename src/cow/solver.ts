@@ -754,6 +754,12 @@ async function consider(uid: string): Promise<void> {
 
 async function pollAuction(): Promise<void> {
   const res = await fetch(LATEST, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) });
+  if (res.status === 429) {
+    // Sit out a cycle rather than retrying into the wall every 6s, which is what
+    // two solver processes sharing one IP were doing to CoW.
+    auctionBackoffUntil = Date.now() + config.cow.rateLimitBackoffMs;
+    throw new Error('HTTP 429');
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const snap = parseAuctionSnapshot(await res.json());
   if (!snap) return;
@@ -804,8 +810,9 @@ async function pollAuction(): Promise<void> {
 }
 
 let auctionInFlight = false;
+let auctionBackoffUntil = 0;
 const auctionTimer = setInterval(() => {
-  if (auctionInFlight) return;
+  if (auctionInFlight || Date.now() < auctionBackoffUntil) return;
   auctionInFlight = true;
   void pollAuction()
     .catch((err) => logError('cow solver auction poll failed', err))
@@ -864,4 +871,4 @@ process.on('SIGINT', () => {
 });
 process.on('SIGTERM', () => process.emit('SIGINT'));
 
-log('cowswapSolver running (Ctrl+C to stop)');
+log(`${config.chainLabel} solver running (Ctrl+C to stop)`);

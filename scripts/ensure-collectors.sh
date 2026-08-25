@@ -40,17 +40,17 @@ fi
 # The solver simulation: bids on open CoW orders before the winner is known,
 # then re-quotes afterwards to see whether the price would have held. Separate
 # entrypoint and separate schema from the shadow resolver.
-if ! pgrep -f "tsx src/cow/solve[r].ts" > /dev/null 2>&1; then
+if ! pgrep -f "solver.ts --dataset=cowswapSolve[r]" > /dev/null 2>&1; then
   echo "$(date -Is) ensure: cowswapSolver not running, starting" >> logs/ensure.log
-  setsid nohup env CHAIN=cowswapSolver npx tsx src/cow/solver.ts >> logs/collect-solver.log 2>&1 < /dev/null &
+  setsid nohup env CHAIN=cowswapSolver npx tsx src/cow/solver.ts --dataset=cowswapSolver >> logs/collect-solver.log 2>&1 < /dev/null &
   sleep 2
 fi
 
 # Cicada: the same simulation pointed at Arbitrum and at one named solver.
 # Separate schema and separate process, so the Ethereum dataset is unaffected.
-if ! pgrep -f "CHAIN=cicad[a]" > /dev/null 2>&1; then
+if ! pgrep -f "solver.ts --dataset=cicad[a]" > /dev/null 2>&1; then
   echo "$(date -Is) ensure: cicada not running, starting" >> logs/ensure.log
-  setsid nohup env CHAIN=cicada npx tsx src/cow/solver.ts >> logs/collect-cicada.log 2>&1 < /dev/null &
+  setsid nohup env CHAIN=cicada npx tsx src/cow/solver.ts --dataset=cicada >> logs/collect-cicada.log 2>&1 < /dev/null &
   sleep 2
 fi
 
