@@ -518,30 +518,34 @@ export const config = {
     confirmations: 1,
     /** cap on blocks per getLogs call, so a long outage backfills gradually */
     maxBlockSpan: 200,
-    /** How often to read the public solver-competition feed.
+    /** How often to ask for the solver-competition feed.
      *
-     *  CoW's limit is far tighter than the endpoint advertises, and the bucket
-     *  is shared ACROSS CHAINS: a mainnet request followed a second later by an
-     *  Arbitrum one gets 429, and once tripped the penalty persists regardless
-     *  of how long you then wait. Two solver processes at 6s each was double
-     *  what it tolerates, and cicada — the newer, slower chain — was starved to
-     *  a standstill by the busier one.
+     *  CoW's limit is per-IP and shared ACROSS CHAINS: a mainnet request
+     *  followed a second later by an Arbitrum one is refused, and once tripped
+     *  the penalty persists regardless of how long you then wait.
      *
-     *  Fifteen seconds per process is ~7.5s combined, inside the roughly one
-     *  request per six seconds that survives. No signal is lost: mainnet
-     *  auctions advance every ~25s and Arbitrum every ~4 minutes, so we were
-     *  polling far faster than either produces anything. */
-    competitionPollMs: 15_000,
+     *  Kept short deliberately, because the shared gate does the pacing now. A
+     *  long timer plus a gate produces permanent starvation: two processes on
+     *  15s timers against an 8s gate lock into a phase where the second is
+     *  denied every single time — measured, cicada skipped 8 of 8 while the
+     *  other skipped none and sat at zero discovered orders for an hour.
+     *  Asking often and being paced is fair; asking rarely and being refused
+     *  is not. */
+    competitionPollMs: 3_000,
     /** Random delay before the first poll, so two processes started together by
      *  the supervisor do not line up and collide on every tick thereafter. */
     pollJitterMs: 7_000,
-    /** Minimum gap between CoW polls by ANY process on this host.
+    /** Minimum gap between CoW requests by ANY process on this host.
      *
      *  Measured: roughly one request per six seconds survives, and the bucket is
      *  shared across chains. Eight gives a little headroom. Each dataset still
      *  polls on its own 15s timer; this only stops the two of them landing
      *  together, which is what starved cicada completely. */
     sharedPollMinIntervalMs: 8_000,
+    /** Order lookups are small and far more permissive than the competition
+     *  endpoint, but they are not free and they share the same budget, so they
+     *  are paced too — just far more loosely. */
+    orderLookupMinIntervalMs: 700,
     /** How long to stop polling after a 429, rather than retrying into it. */
     rateLimitBackoffMs: 30_000,
     /** How long the settlement backstop waits before claiming a trade.

@@ -23,7 +23,7 @@ import { config } from '../../config.js';
 const GATE = join(tmpdir(), 'cow-poll-gate');
 
 /** Take the shared slot, or report that someone else has it. */
-export function takePollSlot(minIntervalMs = config.cow.sharedPollMinIntervalMs): boolean {
+export function takePollSlot(minIntervalMs: number = config.cow.sharedPollMinIntervalMs): boolean {
   const now = Date.now();
   let lastMs = 0;
   try {
@@ -50,7 +50,7 @@ export function takePollSlot(minIntervalMs = config.cow.sharedPollMinIntervalMs)
 }
 
 /** How long until the slot frees up, for logging that is not just "denied". */
-export function pollSlotWaitMs(minIntervalMs = config.cow.sharedPollMinIntervalMs): number {
+export function pollSlotWaitMs(minIntervalMs: number = config.cow.sharedPollMinIntervalMs): number {
   try {
     return Math.max(0, minIntervalMs - (Date.now() - statSync(GATE).mtimeMs));
   } catch {
