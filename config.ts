@@ -541,8 +541,13 @@ export const config = {
      *  Measured with every one of our pollers stopped: the endpoint answered
      *  6 of 6 at 4s spacing on Arbitrum and 3 of 3 on mainnet. So the limit is
      *  roughly one request per four seconds from this IP, and every 429 we spent
-     *  the afternoon fighting was self-inflicted. */
-    sharedPollMinIntervalMs: 4_000,
+     *  the afternoon fighting was self-inflicted.
+     *
+     *  This is the PER-DATASET interval, and there are two of them, so the pair
+     *  sums to one request per four seconds. Sized this way rather than shared,
+     *  because a shared gate is first-come-first-served and the busier dataset
+     *  takes every slot. */
+    sharedPollMinIntervalMs: 8_000,
     /** How long a lookup will queue for the shared slot before giving up. Past
      *  this the order has usually expired anyway. */
     lookupMaxWaitMs: 20_000,

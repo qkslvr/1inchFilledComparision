@@ -20,7 +20,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { config } from '../../config.js';
 
-const GATE = join(tmpdir(), 'cow-poll-gate');
+/** One gate per dataset, not one shared between them.
+ *
+ *  A single first-come-first-served gate does not share, it queues — and with
+ *  unequal demand the greedy side wins every slot. Ethereum discovers ~68 new
+ *  orders a minute and takes a slot for each, so cicada never landed a single
+ *  successful poll: 59 gate denials, 17 rate-limited attempts, zero orders, all
+ *  night.
+ *
+ *  Separate buckets sized so their sum fits instead. Neither can starve the
+ *  other, because neither can borrow from the other. */
+const GATE = join(tmpdir(), `cow-poll-gate-${process.env.CHAIN ?? 'default'}`);
 
 /** Take the shared slot, or report that someone else has it. */
 export function takePollSlot(minIntervalMs: number = config.cow.sharedPollMinIntervalMs): boolean {
