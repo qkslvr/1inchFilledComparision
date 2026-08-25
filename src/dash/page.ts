@@ -242,7 +242,7 @@ function overviewCard(c) {
     + ov('AUCTIONS SEEN', o.auctionsSeen.toLocaleString('en-US'), o.resolved.toLocaleString('en-US') + ' resolved')
     + ov('OBSERVED', o.observedHours.toFixed(1) + 'h', null)
     + ov('CHAIN', 'ETHEREUM', 'id ' + c.chainId)
-    + ov('ASSETS SEEN', String(o.assetsSeen), null)
+    + ov('ASSETS SEEN', String(o.assetsSeen), o.classified < o.auctionsSeen ? 'classified ' + o.classified : null)
     + ov('BTC', pct(o.btcPct), 'of auctions')
     + ov('ETH', pct(o.ethPct), 'of auctions')
     + ov('STABLE&ndash;STABLE', pct(o.stablePct), 'both legs')

@@ -543,6 +543,7 @@ async function collectSolver(db: Db) {
       ethPct: share(eth),
       stablePct: share(stable),
       otherPct: share(other),
+      classified,
       medianMarginBps:
         coverage?.median_margin_bps === null || coverage?.median_margin_bps === undefined
           ? null
