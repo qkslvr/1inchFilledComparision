@@ -520,18 +520,18 @@ export const config = {
     maxBlockSpan: 200,
     /** How often to ask for the solver-competition feed.
      *
-     *  CoW's limit is per-IP and shared ACROSS CHAINS: a mainnet request
-     *  followed a second later by an Arbitrum one is refused, and once tripped
-     *  the penalty persists regardless of how long you then wait.
+     *  Twenty seconds, against feeds that advance every ~25s on mainnet and
+     *  every ~4 minutes on Arbitrum. Three seconds — the previous value — asked
+     *  roughly eighty times more often than Arbitrum produces anything, and two
+     *  datasets doing that is ~40 requests a minute of ~200KB payloads. That is
+     *  almost certainly what exhausted CoW's daily quota for this IP.
      *
-     *  Kept short deliberately, because the shared gate does the pacing now. A
-     *  long timer plus a gate produces permanent starvation: two processes on
-     *  15s timers against an 8s gate lock into a phase where the second is
-     *  denied every single time — measured, cicada skipped 8 of 8 while the
-     *  other skipped none and sat at zero discovered orders for an hour.
-     *  Asking often and being paced is fair; asking rarely and being refused
-     *  is not. */
-    competitionPollMs: 3_000,
+     *  It also starved our own order lookups. The poll and the lookups draw on
+     *  one per-dataset budget, and a poll that wants a slot every three seconds
+     *  takes all of them: cicada saw 417 new orders and failed to look up all
+     *  417 of them. Polling at the rate the data actually changes leaves the
+     *  budget for the lookups, which are the scarce and valuable call. */
+    competitionPollMs: 20_000,
     /** Random delay before the first poll, so two processes started together by
      *  the supervisor do not line up and collide on every tick thereafter. */
     pollJitterMs: 7_000,
