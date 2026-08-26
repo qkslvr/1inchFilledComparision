@@ -59,6 +59,8 @@ interface ChainProfile {
    *  different question from "would we have won", and it needs their own bid as
    *  the bar rather than the auction winner's. */
   targetSolver?: string;
+  /** Override the auction poll interval where the chain warrants it. */
+  competitionPollMs?: number;
   /** PancakeSwap V3 QuoterV2, on chains where it is deployed. */
   pancakeQuoter?: string;
   /** PancakeSwap V3 fee tiers, in hundredths of a bip. */
@@ -319,6 +321,12 @@ const profiles: Record<string, ChainProfile> = {
     schemaOverride: 'cicada_42161',
     orderSource: 'cow-solver',
     targetSolver: '0x4cdaf5df3afe11f1726b8975a925245ad14e9f3b',
+    // Arbitrum decides an auction roughly every four minutes, against mainnet's
+    // twenty-five seconds. Polling it every 20s asked twelve times more often
+    // than it produces anything, and every one of those requests was refused
+    // while the busier mainnet dataset's went through — so the waste was not
+    // merely wasteful, it was the reason this dataset collected nothing.
+    competitionPollMs: 90_000,
     // Above the ~15s structural floor, so it separates clean samples from
     // lagged ones. At 30s it sat below the old 41s floor and flagged every
     // single tick, which made the signal useless.
@@ -531,7 +539,7 @@ export const config = {
      *  takes all of them: cicada saw 417 new orders and failed to look up all
      *  417 of them. Polling at the rate the data actually changes leaves the
      *  budget for the lookups, which are the scarce and valuable call. */
-    competitionPollMs: 20_000,
+    competitionPollMs: profile.competitionPollMs ?? 20_000,
     /** Random delay before the first poll, so two processes started together by
      *  the supervisor do not line up and collide on every tick thereafter. */
     pollJitterMs: 7_000,
