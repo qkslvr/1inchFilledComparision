@@ -23,6 +23,7 @@
  *  failure long-dated BNB orders already caused once. */
 import { config } from '../../config.js';
 import { logError } from '../log.js';
+import { cowGetJson, cowGetJsonOrNull, CowHttpError } from './http.js';
 import { blockTimestampMs, type CowTrade } from './settlements.js';
 
 const LATEST = `${config.cow.apiBase}/${config.cow.chainSlug}/api/v2/solver_competition/latest`;
@@ -217,14 +218,11 @@ export async function fetchCompetitionByTx(txHash: string): Promise<CowCompetiti
   const hit = byTxCache.get(txHash);
   if (hit !== undefined) return hit;
   try {
-    const res = await fetch(`${BY_TX}/${txHash}`, {
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(15_000),
-    });
-    // Do not cache a rate-limited miss: it says nothing about the auction and
-    // would make one unlucky moment permanent for that settlement.
-    if (!res.ok) return null;
-    const comp = tradesFromCompetition((await res.json()) as RawCompetition)?.competition ?? null;
+    const raw = await cowGetJsonOrNull<RawCompetition>(`${BY_TX}/${txHash}`, 15_000);
+    // Do not cache a failed lookup: it says nothing about the auction and would
+    // make one unlucky moment permanent for that settlement.
+    if (!raw) return null;
+    const comp = tradesFromCompetition(raw)?.competition ?? null;
     if (byTxCache.size > 500) byTxCache.clear();
     byTxCache.set(txHash, comp);
     return comp;
@@ -263,17 +261,17 @@ export class CompetitionFeed {
     if (this.inFlight || this.stopped || Date.now() < this.backoffUntilMs) return;
     this.inFlight = true;
     try {
-      const res = await fetch(LATEST, {
-        headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(20_000),
-      });
-      if (res.status === 429) {
-        // Sit out a whole advance cycle rather than retrying into the wall.
-        this.backoffUntilMs = Date.now() + config.cow.rateLimitBackoffMs;
-        throw new Error('HTTP 429');
+      let raw: RawCompetition;
+      try {
+        raw = await cowGetJson<RawCompetition>(LATEST);
+      } catch (err) {
+        if (err instanceof CowHttpError && err.status === 429) {
+          // Sit out a whole advance cycle rather than retrying into the wall.
+          this.backoffUntilMs = Date.now() + config.cow.rateLimitBackoffMs;
+        }
+        throw err;
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const parsed = tradesFromCompetition((await res.json()) as RawCompetition);
+      const parsed = tradesFromCompetition(raw);
       if (!parsed) return;
       const { competition, trades } = parsed;
       // The feed repeats the same auction between blocks; only act on a new one.

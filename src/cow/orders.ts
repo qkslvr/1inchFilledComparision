@@ -6,6 +6,7 @@
 import { config } from '../../config.js';
 import { logError } from '../log.js';
 import { awaitPollSlot } from './pollgate.js';
+import { cowGetJsonOrNull } from './http.js';
 
 const ORDERS = `${config.cow.apiBase}/${config.cow.chainSlug}/api/v1/orders`;
 
@@ -32,12 +33,11 @@ export async function fetchSignedOrder(uid: string): Promise<CowSignedOrder | nu
     return null;
   }
   try {
-    const res = await fetch(`${ORDERS}/${uid}`, {
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(12_000),
-    });
-    if (!res.ok) return null;
-    const o = (await res.json()) as Record<string, string | boolean | undefined>;
+    const o = await cowGetJsonOrNull<Record<string, string | boolean | undefined>>(
+      `${ORDERS}/${uid}`,
+      12_000
+    );
+    if (!o) return null;
     if (!o.sellToken || !o.buyToken || !o.sellAmount || !o.buyAmount) return null;
     return {
       uid,

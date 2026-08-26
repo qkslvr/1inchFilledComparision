@@ -35,6 +35,7 @@ import { fetchSignedOrder, type CowSignedOrder } from './orders.js';
 import { scoreOf, scoreOfBuy, scoreMarginBps, notionalNative, wouldHaveWon } from './score.js';
 import { tokenDecimals, tokenSymbol, weiToTokenViaUsd } from './tokens.js';
 import { takePollSlot } from './pollgate.js';
+import { cowGetJson, CowHttpError } from './http.js';
 import { bpsOfCeil, ppmOfCeil, quoteForBaseCeil, rescale, toFloat } from '../pricing/units.js';
 import { buildDecidedOutcome, OUTCOME_ORDER_SQL, OUTCOME_TICK_SQL } from '../report/outcome.js';
 import { log, logError } from '../log.js';
@@ -770,15 +771,16 @@ async function pollAuction(): Promise<void> {
     slotDenied++;
     return;
   }
-  const res = await fetch(LATEST, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) });
-  if (res.status === 429) {
-    // Sit out a cycle rather than retrying into the wall every 6s, which is what
-    // two solver processes sharing one IP were doing to CoW.
-    auctionBackoffUntil = Date.now() + config.cow.rateLimitBackoffMs;
-    throw new Error('HTTP 429');
+  let raw: Parameters<typeof parseAuctionSnapshot>[0];
+  try {
+    raw = await cowGetJson<Parameters<typeof parseAuctionSnapshot>[0]>(LATEST);
+  } catch (err) {
+    if (err instanceof CowHttpError && err.status === 429) {
+      auctionBackoffUntil = Date.now() + config.cow.rateLimitBackoffMs;
+    }
+    throw err;
   }
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const snap = parseAuctionSnapshot(await res.json());
+  const snap = parseAuctionSnapshot(raw);
   if (!snap) return;
   if (snap.prices.size > 0) latestPrices = snap.prices;
 
