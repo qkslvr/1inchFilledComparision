@@ -551,6 +551,8 @@ export const config = {
     /** How long a lookup will queue for the shared slot before giving up. Past
      *  this the order has usually expired anyway. */
     lookupMaxWaitMs: 20_000,
+    /** How many polls an order may be retried across before we stop trying. */
+    maxLookupAttempts: 6,
     /** How long to stop polling after a 429, rather than retrying into it. */
     rateLimitBackoffMs: 30_000,
     /** How long the settlement backstop waits before claiming a trade.

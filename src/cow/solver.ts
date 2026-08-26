@@ -323,7 +323,9 @@ let holdChecks = 0;
 let evicted = 0;
 /** Why candidates were turned away. Without this the tracker reporting zero is
  *  indistinguishable from the feed being empty, which cost an afternoon. */
-const rejected = { lookup: 0, notOpen: 0, expired: 0, noDecimals: 0, noQuote: 0, tooFar: 0, newUids: 0 };
+const rejected = { lookup: 0, notOpen: 0, expired: 0, noDecimals: 0, noQuote: 0, tooFar: 0, newUids: 0, giveUp: 0 };
+/** Lookup attempts per uid, so a retry cannot become an infinite one. */
+const attempts = new Map<string, number>();
 
 /** What our bid is worth, in native wei, for either kind of order.
  *
@@ -646,20 +648,24 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
 }
 
 /** Take on a newly seen open order, if it is one we could actually fill. */
-async function consider(uid: string): Promise<void> {
-  if (tracked.size >= config.cow.solverMaxTracked) return;
+type Verdict = 'done' | 'retry';
+
+async function consider(uid: string): Promise<Verdict> {
+  if (tracked.size >= config.cow.solverMaxTracked) return 'retry';
   const order = await fetchSignedOrder(uid);
   if (!order) {
+    // Could be a rate-limit slot we never got, or a network blip. Either way we
+    // learned nothing, so this is not a decision about the order.
     rejected.lookup++;
-    return;
+    return 'retry';
   }
   if (order.status !== 'open') {
     rejected.notOpen++;
-    return;
+    return 'done';
   }
   if (order.validToMs && order.validToMs < Date.now()) {
     rejected.expired++;
-    return;
+    return 'done';
   }
   // A configured pair is a bonus, not a requirement: it unlocks the KalqiX book.
   // Kyber and Bebop quote by address, so everything else is still priceable, and
@@ -671,7 +677,7 @@ async function consider(uid: string): Promise<void> {
     // Without decimals every amount is meaningless, so this is the one case we
     // genuinely cannot price.
     rejected.noDecimals++;
-    return;
+    return 'retry';
   }
   // Most of the solvable set is long-dated limit orders resting far from market.
   // Quoting them all would flood the database for no signal, so an order has to
@@ -697,7 +703,7 @@ async function consider(uid: string): Promise<void> {
   const quotes = await quoteVenues(t);
   if (quotes.size === 0) {
     rejected.noQuote++;
-    return;
+    return 'retry';
   }
   let distanceBps: number | null = null;
   for (const q of quotes.values()) {
@@ -706,7 +712,7 @@ async function consider(uid: string): Promise<void> {
   }
   if (distanceBps === null || distanceBps > Number(config.cow.solverMaxDistanceBps)) {
     rejected.tooFar++;
-    return;
+    return 'done';
   }
 
   await db.insertOrder({
@@ -751,6 +757,7 @@ async function consider(uid: string): Promise<void> {
   tracked.set(uid, t);
   discovered++;
   await quoteRound(t);
+  return 'done';
 }
 
 let slotDenied = 0;
@@ -802,15 +809,43 @@ async function pollAuction(): Promise<void> {
     void db.all(`UPDATE orders SET terminal_at_ms = ? WHERE order_hash = ?`, [now, uid]);
   }
 
-  // Then discovery. The solvable set turns over by only a handful of uids per
-  // auction, so this is a few lookups rather than thousands.
+  // Then discovery.
+  //
+  // A uid is only written off once we have actually decided something about it.
+  // Marking it seen before the attempt meant a transient failure burned it
+  // permanently: 417 orders were skipped in one run because their lookups timed
+  // out waiting for the rate-limit slot, and every one was then ignored forever
+  // even though nothing had been learned about it. Same for orders arriving
+  // while the tracker was full.
   for (const uid of snap.orderUids) {
     if (seenUids.has(uid)) continue;
-    seenUids.add(uid);
-    if (!seeded) continue; // startup backlog: noted, not bid on
-    rejected.newUids++;
+    if (!seeded) {
+      seenUids.add(uid); // startup backlog: noted, never bid on
+      continue;
+    }
+    // No room right now is not a verdict on the order. Leave it unseen so it is
+    // reconsidered when a slot frees up.
     if (tracked.size >= config.cow.solverMaxTracked) continue;
-    await consider(uid).catch((err) => logError(`consider ${uid.slice(0, 12)}`, err));
+
+    const verdict = await consider(uid).catch((err) => {
+      logError(`consider ${uid.slice(0, 12)}`, err);
+      return 'retry' as const;
+    });
+    if (verdict === 'done') {
+      seenUids.add(uid);
+      attempts.delete(uid);
+      rejected.newUids++;
+      continue;
+    }
+    // Retry, but not forever: an order we can never resolve would otherwise be
+    // reconsidered on every single poll for as long as it stays solvable.
+    const n = (attempts.get(uid) ?? 0) + 1;
+    attempts.set(uid, n);
+    if (n >= config.cow.maxLookupAttempts) {
+      seenUids.add(uid);
+      attempts.delete(uid);
+      rejected.giveUp++;
+    }
   }
   if (!seeded) {
     seeded = true;
@@ -853,7 +888,7 @@ const status = setInterval(() => {
     `status: tracked=${tracked.size} discovered=${discovered} bids=${bidsPlaced} ` +
       `resolved=${resolvedCount} won=${wonCount} holdChecks=${holdChecks} evicted=${evicted} ` +
       `new=${rejected.newUids} rejected(lookup=${rejected.lookup} notOpen=${rejected.notOpen} ` +
-      `expired=${rejected.expired} noDecimals=${rejected.noDecimals} noQuote=${rejected.noQuote} tooFar=${rejected.tooFar}) ` +
+      `expired=${rejected.expired} noDecimals=${rejected.noDecimals} noQuote=${rejected.noQuote} tooFar=${rejected.tooFar} gaveUp=${rejected.giveUp}) ` +
       `kyberBudget=${kyberBudget.available}/${config.kyber.budgetPerWindow} (denied ${kyberBudget.denied}) ` +
       `pollSlotSkips=${slotDenied} ` +
       `bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'} ` +
