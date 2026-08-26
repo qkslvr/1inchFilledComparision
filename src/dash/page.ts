@@ -205,6 +205,42 @@ const row = cells => '<tr>' + cells.map(c => '<td class="' + (c && c.num ? 'num'
 function pct(v) { return v === null || v === undefined ? '—' : v.toFixed(0) + '%'; }
 function bps(v) { return v === null || v === undefined ? '—' : (v > 0 ? '+' : '') + v.toFixed(1) + ' bps'; }
 
+function ov(label, value, sub) {
+  return '<div class="ov"><span class="ovl">' + label + '</span>'
+    + '<b class="ovv">' + value + '</b>'
+    + (sub ? '<span class="ovs">' + sub + '</span>' : '') + '</div>';
+}
+
+function usdShort(v) {
+  if (v === null || v === undefined) return '\u2014';
+  var a = Math.abs(v);
+  if (a >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+  if (a >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'k';
+  return '$' + v.toFixed(2);
+}
+
+function overviewCard(c) {
+  var o = c.solver.overview;
+  return '<div class="overview">'
+    + ov('AUCTIONS SEEN', o.auctionsSeen.toLocaleString('en-US'), o.resolved.toLocaleString('en-US') + ' resolved')
+    + ov('OBSERVED', o.observedHours.toFixed(1) + 'h', null)
+    + ov('CHAIN', c.chainId === 1 ? 'ETHEREUM' : c.chainId === 42161 ? 'ARBITRUM' : String(c.chainId), 'id ' + c.chainId)
+    + ov('ASSETS SEEN', String(o.assetsSeen), o.classified < o.auctionsSeen ? 'classified ' + o.classified : null)
+    + ov('BTC', pct(o.btcPct), 'of auctions')
+    + ov('ETH', pct(o.ethPct), 'of auctions')
+    + ov('STABLE&ndash;STABLE', pct(o.stablePct), 'both legs')
+    + ov('OTHER', pct(o.otherPct), 'of auctions')
+    + ov('TOTAL VOLUME', usdShort(o.volumeUsd), 'across ' + o.auctionsSeen.toLocaleString('en-US') + ' auctions')
+    + ov('MEDIAN TRADE', usdShort(o.medianSizeUsd), null)
+    + ov('BIDS WON', o.bidsWon.toLocaleString('en-US'), o.resolved > 0 ? pct(100 * o.bidsWon / o.resolved) + ' of resolved' : null)
+    + ov('QUOTE HELD', pct(o.heldPct), 'all re-quotes')
+    + ov('QUOTE HELD / WON', pct(o.heldWonPct), 'bids we won')
+    + ov('MEDIAN EDGE', bps(o.medianMarginBps), 'vs best rival')
+    + ov('SURPLUS DELIVERED', usdShort(o.surplusUsd), 'above user limits')
+    + ov('OUR FEE', usdShort(o.feeUsd), 'our markup')
+    + '</div>';
+}
+
 function solverCard(v) {
   var cls = v.winRatePct === null ? 'mut' : v.winRatePct >= 50 ? 'win' : '';
   function kv(label, value, extra) {
