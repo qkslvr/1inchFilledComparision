@@ -70,6 +70,18 @@ interface ChainProfile {
    *  genuinely open orders with many minutes left sit in the standing set. Only
    *  bidding on arrivals there means bidding on nothing. */
   bidOnBacklog?: boolean;
+  /** Quote at the moment an auction resolves, rather than while the order is
+   *  open.
+   *
+   *  Forced by the data on Arbitrum: an order enters the solvable list only in
+   *  the auction that settles it — verified on five consecutive settlements,
+   *  present in that auction's list and absent from the one before. There is no
+   *  window in which it is both visible and unsettled, so a pre-bid cannot
+   *  exist. The comparison is still the one that matters for a pitch — on this
+   *  order you bid X, our venues at that moment would have paid Y — but the
+   *  quote is taken after the outcome, and drift between the two is a caveat
+   *  rather than a measurement. */
+  quoteOnResolve?: boolean;
   /** PancakeSwap V3 QuoterV2, on chains where it is deployed. */
   pancakeQuoter?: string;
   /** PancakeSwap V3 fee tiers, in hundredths of a bip. */
@@ -350,6 +362,7 @@ const profiles: Record<string, ChainProfile> = {
     // an order while it is still live.
     competitionPollMs: 15_000,
     bidOnBacklog: true,
+    quoteOnResolve: true,
     // Above the ~15s structural floor, so it separates clean samples from
     // lagged ones. At 30s it sat below the old 41s floor and flagged every
     // single tick, which made the signal useless.
@@ -520,6 +533,7 @@ export const config = {
     chainSlug: profile.cowChainSlug ?? 'mainnet',
     targetSolver: profile.targetSolver?.toLowerCase() ?? null,
     bidOnBacklog: profile.bidOnBacklog === true,
+    quoteOnResolve: profile.quoteOnResolve === true,
     /** quotes need a from/receiver to be returned; nothing is signed or sent */
     quoteFrom: '0x0000000000000000000000000000000000000001',
     feeBps: 5n,

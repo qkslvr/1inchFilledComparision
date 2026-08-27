@@ -343,6 +343,10 @@ interface Tracked {
 }
 
 const tracked = new Map<string, Tracked>();
+/** Orders being registered right now. Two paths can reach the same uid — the
+ *  open-order one and the settle-time one — and orderExists() is a round trip,
+ *  so both can pass it before either has written. */
+const registering = new Set<string>();
 const seenUids = new Set<string>();
 /** The solvable set already contains ~7,700 orders when we start, nearly all of
  *  them long-dated limit orders resting far from market. Bidding on those fills
@@ -682,6 +686,76 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
   }
 }
 
+/** Price an order at the moment its auction resolves.
+ *
+ *  The pre-bid path cannot run on a chain where orders are invisible until they
+ *  settle. This keeps the comparison that matters — what our venues would have
+ *  paid against what each solver proposed — and accepts that the quote is taken
+ *  after the outcome rather than before it. `bid_at_ms` is set to the quote time
+ *  so the lag is visible in the data rather than implied. */
+async function quoteAndResolveNow(
+  uid: string,
+  snap: CowAuctionSnapshot,
+  settled: { sellAmount: bigint; buyAmount: bigint; buyToken: string; sellToken: string }
+): Promise<void> {
+  if (registering.has(uid) || (await db.orderExists(uid))) return;
+  registering.add(uid);
+  try {
+    const order = await fetchSignedOrder(uid);
+    if (!order) return;
+    const [sellDecimals, buyDecimals] = await Promise.all([
+      tokenDecimals(order.sellToken, (a) => bebop.decimalsFor(a)),
+      tokenDecimals(order.buyToken, (a) => bebop.decimalsFor(a)),
+    ]);
+    if (sellDecimals === null || buyDecimals === null) return;
+    const match = pairForTokens(wethFor(order.sellToken), wethFor(order.buyToken));
+    const [sellSymbol, buySymbol] = await Promise.all([
+      tokenSymbol(order.sellToken),
+      tokenSymbol(order.buyToken),
+    ]);
+    const t: Tracked = {
+      order, sellSymbol, buySymbol,
+      pair: match ? match.pair : null,
+      direction: match ? match.direction : null,
+      sellDecimals, buyDecimals,
+      registered: false, quoteRounds: 0,
+      lastQuotes: new Map(), lastQuoteAtMs: 0,
+      discoveredAtMs: Date.now(),
+    };
+    const quotes = await quoteVenues(t);
+    if (quotes.size === 0) {
+      rejected.noQuote++;
+      return;
+    }
+    await db.insertOrder({
+      orderHash: order.uid, runId, receivedAtMs: Date.now(), source: 'auction', lateSeen: true,
+      makerAsset: order.sellToken, takerAsset: order.buyToken,
+      makingAmount: order.sellAmount, takingAmount: order.buyAmount,
+      remainingMaker: order.sellAmount, makerAddress: order.owner,
+      pair: match ? match.pair.ticker : `${sellSymbol ?? tokenLabel(order.sellToken)}/${buySymbol ?? tokenLabel(order.buyToken)}`,
+      direction: match ? match.direction : null,
+      hedgeAssetKind: null, eligible: true, kyberOnly: false, skipReason: null,
+      sizeUsd: (match ? sizeUsdOf(order, match.pair, match.direction) : null) ?? sizeUsdFromQuote(quotes),
+      auctionStartMs: null, auctionDurationS: null, initialRateBump: null, auctionPointsJson: null,
+      gasBumpEstimate: null, gasPriceEstimate: null,
+      allowPartialFills: order.partiallyFillable, allowMultipleFills: null,
+      deadlineMs: order.validToMs || null, extensionRaw: null, orderStructJson: null,
+      limitSellAmount: order.sellAmount, limitBuyAmount: order.buyAmount,
+      validToMs: order.validToMs || null, partiallyFillable: order.partiallyFillable,
+      orderKind: order.kind, sellSymbol, buySymbol,
+    });
+    t.registered = true;
+    t.lastQuotes = quotes;
+    t.lastQuoteAtMs = Date.now();
+    tracked.set(uid, t);
+    discovered++;
+    await quoteRound(t);
+    await resolve(t, snap, settled.buyAmount);
+  } finally {
+    registering.delete(uid);
+  }
+}
+
 /** Take on a newly seen open order, if it is one we could actually fill. */
 type Verdict = 'done' | 'retry';
 
@@ -829,7 +903,21 @@ async function pollAuction(): Promise<void> {
   // must stop accruing bids before we look at what else is open.
   for (const s of snap.settled) {
     const t = tracked.get(s.uid);
-    if (t) await resolve(t, snap, s.buyAmount);
+    if (t) {
+      await resolve(t, snap, s.buyAmount);
+      continue;
+    }
+    // Where an order is only ever visible in the auction that settles it, there
+    // was no chance to bid on it beforehand — so quote now and compare anyway.
+    // Verified on Arbitrum: a settled uid is in that auction's solvable list and
+    // absent from the previous one, every time. Without this the dataset can
+    // never record anything, because the only orders it can see are already
+    // decided by the time it sees them.
+    if (config.cow.quoteOnResolve) {
+      await quoteAndResolveNow(s.uid, snap, s).catch((err) =>
+        logError(`late resolve ${s.uid.slice(0, 12)}`, err)
+      );
+    }
   }
 
   // Free slots held by orders that are not going to resolve. Without this the
