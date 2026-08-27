@@ -90,10 +90,6 @@ for (const pair of kalqixPairs) {
 
 await gas.start();
 await refPrices.start();
-// Chains without a KalqiX book have no reference price, so seed one from Kyber
-// and keep it fresh; nothing can be costed without it.
-await refreshNativeUsd();
-const nativeUsdTimer = setInterval(() => void refreshNativeUsd(), 180_000);
 await bebop.start();
 for (const m of marketSamplers.values()) m.sampler.setActive(true);
 
@@ -910,6 +906,14 @@ const auctionTimer = setInterval(() => {
 // Phase B: keep quoting everything open. This is what makes the bid a live
 // price rather than a stale one, and it is the behaviour being evaluated —
 // whether continuously polling is worth it is one of the questions.
+// Chains without a KalqiX book have no reference price, so seed one from Kyber
+// and keep it fresh; nothing can be costed without it. Placed here rather than
+// beside the other startup calls because it reads consts declared below them,
+// and a top-level await above their declarations is a temporal dead zone —
+// which crash-looped the process on every supervisor pass.
+await refreshNativeUsd();
+const nativeUsdTimer = setInterval(() => void refreshNativeUsd(), 180_000);
+
 let quoteCursor = 0;
 const quoteTimer = setInterval(() => {
   // Rotate the starting point each round. Iterating insertion order meant the
