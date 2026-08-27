@@ -362,8 +362,12 @@ const profiles: Record<string, ChainProfile> = {
     // an order while it is still live.
     bidOnBacklog: true,
     quoteOnResolve: true,
-    // Auctions land every ~6s here; anything slower skips settlements outright.
-    competitionPollMs: 5_000,
+    // Auctions land every ~6s here. Polling faster than that costs requests and
+    // catches nothing extra on its own — the backfill by id is what guarantees
+    // coverage — but a shorter interval means smaller gaps to backfill and a
+    // fresher quote at the moment of settlement, which is the number being
+    // measured. Cicada has the host to itself, so it can afford it.
+    competitionPollMs: 2_500,
     // Above the ~15s structural floor, so it separates clean samples from
     // lagged ones. At 30s it sat below the old 41s floor and flagged every
     // single tick, which made the signal useless.

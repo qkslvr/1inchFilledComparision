@@ -918,6 +918,7 @@ async function pollAuction(): Promise<void> {
       await settleFrom(gapSnap);
     }
   }
+  auctionsSeen++;
   lastSeenAuctionId = Math.max(lastSeenAuctionId, snap.competition.auctionId);
   if (snap.prices.size > 0) latestPrices = snap.prices;
 
@@ -1005,6 +1006,9 @@ async function pollAuction(): Promise<void> {
 /** Grade every settlement in one auction, whether it arrived live or as backfill. */
 async function settleFrom(snap: CowAuctionSnapshot): Promise<void> {
   for (const s of snap.settled) {
+    // Counted before anything can reject it, so "we never saw the settlement"
+    // and "we saw it and failed to record it" stop looking identical.
+    settlementsSeen++;
     const t = tracked.get(s.uid);
     if (t) {
       await resolve(t, snap, s.buyAmount);
@@ -1013,15 +1017,22 @@ async function settleFrom(snap: CowAuctionSnapshot): Promise<void> {
     // Where an order is only ever visible in the auction that settles it, there
     // was no chance to bid beforehand — quote now and compare anyway.
     if (config.cow.quoteOnResolve) {
+      const before = resolvedCount;
       await quoteAndResolveNow(s.uid, snap, s).catch((err) =>
         logError(`late resolve ${s.uid.slice(0, 12)}`, err)
       );
+      if (resolvedCount === before) settlementsDropped++;
+    } else {
+      settlementsDropped++;
     }
   }
 }
 
 let lastSeenAuctionId = 0;
 let backfilled = 0;
+let settlementsSeen = 0;
+let settlementsDropped = 0;
+let auctionsSeen = 0;
 let auctionInFlight = false;
 // Stagger the first poll. Both datasets are started by the same supervisor pass,
 // so without this they tick in lockstep forever and every collision is mutual.
@@ -1066,7 +1077,7 @@ const status = setInterval(() => {
       `new=${rejected.newUids} rejected(lookup=${rejected.lookup} notOpen=${rejected.notOpen} ` +
       `expired=${rejected.expired} resting=${rejected.resting} noDecimals=${rejected.noDecimals} noQuote=${rejected.noQuote} tooFar=${rejected.tooFar} gaveUp=${rejected.giveUp}) ` +
       `kyberBudget=${kyberBudget.available}/${config.kyber.budgetPerWindow} (denied ${kyberBudget.denied}) ` +
-      `pollSlotSkips=${slotDenied} backfilled=${backfilled} ` +
+      `auctions=${auctionsSeen} backfilled=${backfilled} settlements=${settlementsSeen} dropped=${settlementsDropped} ` +
       `bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'} ` +
       (db.storagePressure ? ` STORAGE-PRESSURE(${db.droppedTicks} dropped)` : '')
   );
