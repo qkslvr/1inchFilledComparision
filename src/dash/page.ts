@@ -222,17 +222,17 @@ function usdShort(v) {
 function overviewCard(c) {
   var o = c.solver.overview;
   return '<div class="overview">'
-    + ov('AUCTIONS SEEN', o.auctionsSeen.toLocaleString('en-US'), o.resolved.toLocaleString('en-US') + ' resolved')
+    + ov('ORDERS TRACKED', o.auctionsSeen.toLocaleString('en-US'), o.resolved.toLocaleString('en-US') + ' resolved')
     + ov('OBSERVED', o.observedHours.toFixed(1) + 'h', null)
     + ov('CHAIN', c.chainId === 1 ? 'ETHEREUM' : c.chainId === 42161 ? 'ARBITRUM' : String(c.chainId), 'id ' + c.chainId)
     + ov('ASSETS SEEN', String(o.assetsSeen), o.classified < o.auctionsSeen ? 'classified ' + o.classified : null)
-    + ov('BTC', pct(o.btcPct), 'of auctions')
-    + ov('ETH', pct(o.ethPct), 'of auctions')
+    + ov('BTC', pct(o.btcPct), 'of orders')
+    + ov('ETH', pct(o.ethPct), 'of orders')
     + ov('STABLE&ndash;STABLE', pct(o.stablePct), 'both legs')
-    + ov('OTHER', pct(o.otherPct), 'of auctions')
-    + ov('TOTAL VOLUME', usdShort(o.volumeUsd), 'across ' + o.auctionsSeen.toLocaleString('en-US') + ' auctions')
+    + ov('OTHER', pct(o.otherPct), 'of orders')
+    + ov('TOTAL VOLUME', usdShort(o.volumeUsd), 'of orders tracked')
     + ov('MEDIAN TRADE', usdShort(o.medianSizeUsd), null)
-    + ov('BIDS WON', o.bidsWon.toLocaleString('en-US'), o.resolved > 0 ? pct(100 * o.bidsWon / o.resolved) + ' of resolved' : null)
+    + ov('BIDS WON', o.resolved > 0 ? o.bidsWon.toLocaleString('en-US') : '\u2014', o.resolved > 0 ? pct(100 * o.bidsWon / o.resolved) + ' of resolved' : 'nothing resolved yet')
     + ov('QUOTE HELD', pct(o.heldPct), 'all re-quotes')
     + ov('QUOTE HELD / WON', pct(o.heldWonPct), 'bids we won')
     + ov('MEDIAN EDGE', bps(o.medianMarginBps), 'vs best rival')

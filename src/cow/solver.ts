@@ -135,7 +135,11 @@ function sizeUsdOf(
  *  free with a quote we were making anyway — no extra request, no price feed. */
 function sizeUsdFromQuote(quotes: Map<Venue, VenueQuote>): number | null {
   const usd6 = quotes.get('kyber')?.outUsd6;
-  return usd6 === null || usd6 === undefined || usd6 <= 0n ? null : toFloat(usd6, 6);
+  if (usd6 === null || usd6 === undefined || usd6 <= 0n) return null;
+  const usd = toFloat(usd6, 6);
+  // An illiquid pair can produce a nonsense valuation, and one such row was the
+  // whole volume headline. No size is more honest than a false one.
+  return usd > config.cow.maxBelievableSizeUsd ? null : usd;
 }
 
 /** Native token price in 6dp dollars.

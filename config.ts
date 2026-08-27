@@ -573,6 +573,14 @@ export const config = {
     lookupMaxWaitMs: 20_000,
     /** How many polls an order may be retried across before we stop trying. */
     maxLookupAttempts: 6,
+    /** Largest USD size we will believe from a venue's own valuation.
+     *
+     *  Kyber reports what its output is worth, which is the only price we have
+     *  for an unconfigured token — and on an illiquid pair it can be wildly
+     *  wrong. One PYUSD/USDai order came back at $100,003,596 against a median
+     *  trade of $200, and that single row was the entire "total volume" figure
+     *  on the dashboard. Above this we record no size rather than a false one. */
+    maxBelievableSizeUsd: 25_000_000,
     /** How long to stop polling after a 429, rather than retrying into it. */
     rateLimitBackoffMs: 30_000,
     /** How long the settlement backstop waits before claiming a trade.
