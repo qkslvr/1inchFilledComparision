@@ -287,10 +287,9 @@ function solverSection(c) {
   h += '<div class="cards">' + s.venues.map(solverCard).join('') + '</div>';
   h += '<div class="eyebrow">TRADES</div>';
   h += '<p class="mut" style="font-size:12px;margin:0 0 8px;line-height:1.7">'
-    + '<b>margin</b> — how much more of the trade value we would have given the user than the best rival who bid on <em>this</em> order, in bps. Not against the winning solution\u2019s total, which covers its whole bundle.<br>'
-    + '<b>slippage</b> — how much worse our venue\u2019s price was when re-quoted after the result was known. <b>held</b> is yes when that move stayed inside the safety margin we had already priced in.<br>'
-    + '<b>quotes</b> — how many times we re-priced the order while it was open. <b>lead s</b> — seconds between our final bid and the auction resolving.<br>'
-    + '<b>rivals</b> — solvers who bid on this order, the field we were actually against. <b>solvers</b> — every solution in the batch, most of which ignored this order.'
+    + 'Sell 1 ETH with a $2,500 limit, best venue quoting $2,510: <b>size</b> $2,500, <b>fee</b> $1.26 (our 5 bps, the only money we earn), <b>surplus</b> $6.74 handed to the user above their limit, and <b>edge</b> the dollars of that surplus beyond what the best rival offered on this same order.<br>'
+    + '<b>move</b> — how far the venue price shifted when we re-quoted after the result was known. <b>held</b> is yes when that stayed within tolerance, i.e. the fill would still have been good.<br>'
+    + '<b>rivals</b> — solvers who bid on this order, which is the field we were actually against rather than every solution in the batch.'
     + '</p>';
   h += '<div class="controls">'
     + '<input id="fq" placeholder="filter: pair, venue…" oninput="applyFilters()">'
@@ -302,12 +301,12 @@ function solverSection(c) {
     + '<option value="held">quote held</option><option value="slipped">quote slipped</option></select>'
     + '<span class="mut" id="fcount"></span></div>';
 
-  var headers = ['TIME', 'PAIR', 'SIDE', '$SIZE', '$SURPLUS', '$EDGE', '$FEE', 'VENUE', 'RIVALS', 'RESULT', '$MARGIN', 'HELD', '$MOVE', '$QUOTES', '$LEAD'];
+  var headers = ['TIME', 'PAIR', 'SIDE', '$SIZE', '$SURPLUS', '$FEE', '$EDGE', 'VENUE', 'RIVALS', 'RESULT', 'HELD', '$MOVE'];
   // A grouping row above the columns, so it reads as three blocks — the trade,
   // what we bid, how it turned out — instead of fifteen equal columns.
   h += '<table id="solvertbl"><thead><tr class="grp">'
     + '<th colspan="4">TRADE</th><th colspan="3">OUR BID ($)</th>'
-    + '<th colspan="2">SOURCE</th><th colspan="3">OUTCOME</th><th colspan="3">QUALITY</th></tr><tr>'
+    + '<th colspan="2">SOURCE</th><th colspan="3">OUTCOME</th></tr><tr>'
     + headers.map(function (t, i) {
     var num = t.charAt(0) === '$';
     return '<th class="sortable' + (num ? ' num' : '') + '" onclick="sortSolver(' + i + ')">' + esc(t.replace('$', '')) + '<span class="ind"></span></th>';
@@ -340,16 +339,14 @@ function solverRow(o) {
     + '<td>' + esc(o.kind || '') + '</td>'
     + num(o.sizeUsd, esc(usd(o.sizeUsd)))
     + num(o.surplusUsd, usdShort(o.surplusUsd))
-    + num(o.edgeUsd, usdShort(o.edgeUsd), o.edgeUsd > 0 ? 'pos' : o.edgeUsd < 0 ? 'neg' : '')
     + num(o.feeUsd, usdShort(o.feeUsd))
+    + num(o.edgeUsd, o.noBid ? '<span class="mut">\u2014</span>' : usdShort(o.edgeUsd),
+          o.edgeUsd > 0 ? 'pos' : o.edgeUsd < 0 ? 'neg' : '')
     + '<td>' + esc(o.venue || '') + '</td>'
     + num(o.rivalCount, o.rivalCount === null ? '\u2014' : String(o.rivalCount))
     + '<td>' + res + '</td>'
-    + num(o.marginBps, o.noBid ? '<span class="mut">\u2014</span>' : bps(o.marginBps))
     + '<td>' + held + '</td>'
     + num(o.slippageBps, bps(o.slippageBps))
-    + num(o.quoteRounds, String(o.quoteRounds))
-    + num(o.bidLeadMs, o.bidLeadMs === null ? '\u2014' : (o.bidLeadMs / 1000).toFixed(0))
     + '</tr>';
 }
 
