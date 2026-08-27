@@ -1,5 +1,6 @@
 import { config } from '../../config.js';
 import { RequestBudget } from './budget.js';
+import { getJson, HttpStatusError } from '../http/json.js';
 
 export class KyberRateLimitError extends Error {
   constructor() {
@@ -81,17 +82,20 @@ async function quoteOnce(
     `${config.kyber.apiBase}/${config.kyber.chainSlug}/api/v1/routes` +
     `?tokenIn=${tokenIn}&tokenOut=${tokenOut}&amountIn=${amountIn}&gasInclude=true`;
   const started = Date.now();
-  const res = await fetch(url, {
-    headers: { 'x-client-id': config.kyber.clientId },
-    signal: AbortSignal.timeout(config.kyber.quoteTimeoutMs),
-  });
-  if (res.status === 429) throw new KyberRateLimitError();
-  if (!res.ok) throw new Error(`Kyber quote HTTP ${res.status}`);
-  const body = (await res.json()) as {
+  // Node's fetch is refused by Kyber's edge the same way CoW's refuses it — the
+  // app saw a steady stream of 429s while curl from the same host had 28 of its
+  // 30 requests still on the clock. See src/http/json.ts.
+  let body: {
     code?: number;
     message?: string;
     data?: { routeSummary?: { amountOut?: string; gas?: string; amountOutUsd?: string } };
   };
+  try {
+    body = await getJson(url, config.kyber.quoteTimeoutMs, { 'x-client-id': config.kyber.clientId });
+  } catch (err) {
+    if (err instanceof HttpStatusError && err.status === 429) throw new KyberRateLimitError();
+    throw err;
+  }
   const rs = body.data?.routeSummary;
   if (!rs?.amountOut) {
     throw new Error(`Kyber quote unusable: code=${body.code} message=${body.message}`);

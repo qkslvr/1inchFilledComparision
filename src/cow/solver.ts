@@ -35,7 +35,7 @@ import { fetchSignedOrder, type CowSignedOrder } from './orders.js';
 import { scoreOf, scoreOfBuy, scoreMarginBps, notionalNative, wouldHaveWon } from './score.js';
 import { tokenDecimals, tokenSymbol, weiToTokenViaUsd } from './tokens.js';
 import { takePollSlot } from './pollgate.js';
-import { cowGetJson, CowHttpError } from './http.js';
+import { getJson, HttpStatusError } from '../http/json.js';
 import { bpsOfCeil, ppmOfCeil, quoteForBaseCeil, rescale, toFloat } from '../pricing/units.js';
 import { buildDecidedOutcome, OUTCOME_ORDER_SQL, OUTCOME_TICK_SQL } from '../report/outcome.js';
 import { log, logError } from '../log.js';
@@ -773,9 +773,9 @@ async function pollAuction(): Promise<void> {
   }
   let raw: Parameters<typeof parseAuctionSnapshot>[0];
   try {
-    raw = await cowGetJson<Parameters<typeof parseAuctionSnapshot>[0]>(LATEST);
+    raw = await getJson<Parameters<typeof parseAuctionSnapshot>[0]>(LATEST);
   } catch (err) {
-    if (err instanceof CowHttpError && err.status === 429) {
+    if (err instanceof HttpStatusError && err.status === 429) {
       auctionBackoffUntil = Date.now() + config.cow.rateLimitBackoffMs;
     }
     throw err;

@@ -23,7 +23,7 @@
  *  failure long-dated BNB orders already caused once. */
 import { config } from '../../config.js';
 import { logError } from '../log.js';
-import { cowGetJson, cowGetJsonOrNull, CowHttpError } from './http.js';
+import { getJson, getJsonOrNull, HttpStatusError } from '../http/json.js';
 import { blockTimestampMs, type CowTrade } from './settlements.js';
 
 const LATEST = `${config.cow.apiBase}/${config.cow.chainSlug}/api/v2/solver_competition/latest`;
@@ -218,7 +218,7 @@ export async function fetchCompetitionByTx(txHash: string): Promise<CowCompetiti
   const hit = byTxCache.get(txHash);
   if (hit !== undefined) return hit;
   try {
-    const raw = await cowGetJsonOrNull<RawCompetition>(`${BY_TX}/${txHash}`, 15_000);
+    const raw = await getJsonOrNull<RawCompetition>(`${BY_TX}/${txHash}`, 15_000);
     // Do not cache a failed lookup: it says nothing about the auction and would
     // make one unlucky moment permanent for that settlement.
     if (!raw) return null;
@@ -263,9 +263,9 @@ export class CompetitionFeed {
     try {
       let raw: RawCompetition;
       try {
-        raw = await cowGetJson<RawCompetition>(LATEST);
+        raw = await getJson<RawCompetition>(LATEST);
       } catch (err) {
-        if (err instanceof CowHttpError && err.status === 429) {
+        if (err instanceof HttpStatusError && err.status === 429) {
           // Sit out a whole advance cycle rather than retrying into the wall.
           this.backoffUntilMs = Date.now() + config.cow.rateLimitBackoffMs;
         }
