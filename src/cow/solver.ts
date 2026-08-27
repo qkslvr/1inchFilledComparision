@@ -358,7 +358,7 @@ let holdChecks = 0;
 let evicted = 0;
 /** Why candidates were turned away. Without this the tracker reporting zero is
  *  indistinguishable from the feed being empty, which cost an afternoon. */
-const rejected = { lookup: 0, notOpen: 0, expired: 0, noDecimals: 0, noQuote: 0, tooFar: 0, newUids: 0, giveUp: 0 };
+const rejected = { lookup: 0, notOpen: 0, expired: 0, resting: 0, noDecimals: 0, noQuote: 0, tooFar: 0, newUids: 0, giveUp: 0 };
 /** Lookup attempts per uid, so a retry cannot become an infinite one. */
 const attempts = new Map<string, number>();
 
@@ -698,8 +698,15 @@ async function consider(uid: string): Promise<Verdict> {
     rejected.notOpen++;
     return 'done';
   }
-  if (order.validToMs && order.validToMs < Date.now()) {
+  const now0 = Date.now();
+  if (order.validToMs && order.validToMs < now0) {
     rejected.expired++;
+    return 'done';
+  }
+  // A resting order, not live flow. Judged and written off, not retried: its
+  // validTo will still be distant on the next poll.
+  if (order.validToMs && order.validToMs - now0 > config.cow.solverMaxValidToMs) {
+    rejected.resting++;
     return 'done';
   }
   // A configured pair is a bonus, not a requirement: it unlocks the KalqiX book.
@@ -830,6 +837,17 @@ async function pollAuction(): Promise<void> {
   const now = Date.now();
   for (const [uid, t] of [...tracked]) {
     const tooOld = now - t.discoveredAtMs > config.cow.solverMaxTrackAgeMs;
+    // Slots taken before this rule existed, or by an order whose validTo we
+    // now judge too distant to be live flow.
+    const resting = t.order.validToMs > 0 && t.order.validToMs - now > config.cow.solverMaxValidToMs;
+    if (resting) {
+      tracked.delete(uid);
+      lastKyber.delete(uid);
+      evicted++;
+      db.setTerminal(uid, 'unresolved', null, 0n, 0n);
+      void db.all(`UPDATE orders SET terminal_at_ms = ? WHERE order_hash = ?`, [now, uid]);
+      continue;
+    }
     // Past validTo is not the end of the story: the settlement that decides
     // the auction usually lands at or just after it, and that is the moment
     // we are waiting for.
@@ -935,7 +953,7 @@ const status = setInterval(() => {
     `status: tracked=${tracked.size} discovered=${discovered} bids=${bidsPlaced} ` +
       `resolved=${resolvedCount} won=${wonCount} holdChecks=${holdChecks} evicted=${evicted} ` +
       `new=${rejected.newUids} rejected(lookup=${rejected.lookup} notOpen=${rejected.notOpen} ` +
-      `expired=${rejected.expired} noDecimals=${rejected.noDecimals} noQuote=${rejected.noQuote} tooFar=${rejected.tooFar} gaveUp=${rejected.giveUp}) ` +
+      `expired=${rejected.expired} resting=${rejected.resting} noDecimals=${rejected.noDecimals} noQuote=${rejected.noQuote} tooFar=${rejected.tooFar} gaveUp=${rejected.giveUp}) ` +
       `kyberBudget=${kyberBudget.available}/${config.kyber.budgetPerWindow} (denied ${kyberBudget.denied}) ` +
       `pollSlotSkips=${slotDenied} ` +
       `bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'} ` +

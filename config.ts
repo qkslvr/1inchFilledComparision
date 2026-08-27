@@ -581,6 +581,16 @@ export const config = {
      *  trade of $200, and that single row was the entire "total volume" figure
      *  on the dashboard. Above this we record no size rather than a false one. */
     maxBelievableSizeUsd: 25_000_000,
+    /** Ignore orders valid far into the future.
+     *
+     *  Not an asset filter — it says nothing about what is being traded. It
+     *  separates live flow from resting limit orders, which is the difference
+     *  between an order that will settle and one that will not. Measured on
+     *  Arbitrum: of 22 tracked, the ones that settle had validTo 87-490 seconds
+     *  out, while the slots were being consumed by orders valid for 28 days and,
+     *  in one case, 362. Every one of those 22 was still open; none had settled
+     *  and been missed. We were quoting diligently at things that never trade. */
+    solverMaxValidToMs: 3_600_000,
     /** How long to stop polling after a 429, rather than retrying into it. */
     rateLimitBackoffMs: 30_000,
     /** How long the settlement backstop waits before claiming a trade.
