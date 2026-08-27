@@ -698,16 +698,25 @@ async function quoteAndResolveNow(
   snap: CowAuctionSnapshot,
   settled: { sellAmount: bigint; buyAmount: bigint; buyToken: string; sellToken: string }
 ): Promise<void> {
-  if (registering.has(uid) || (await db.orderExists(uid))) return;
+  if (registering.has(uid) || (await db.orderExists(uid))) {
+    dropReason.known++;
+    return;
+  }
   registering.add(uid);
   try {
     const order = await fetchSignedOrder(uid);
-    if (!order) return;
+    if (!order) {
+      dropReason.lookup++;
+      return;
+    }
     const [sellDecimals, buyDecimals] = await Promise.all([
       tokenDecimals(order.sellToken, (a) => bebop.decimalsFor(a)),
       tokenDecimals(order.buyToken, (a) => bebop.decimalsFor(a)),
     ]);
-    if (sellDecimals === null || buyDecimals === null) return;
+    if (sellDecimals === null || buyDecimals === null) {
+      dropReason.decimals++;
+      return;
+    }
     const match = pairForTokens(wethFor(order.sellToken), wethFor(order.buyToken));
     const [sellSymbol, buySymbol] = await Promise.all([
       tokenSymbol(order.sellToken),
@@ -725,6 +734,7 @@ async function quoteAndResolveNow(
     const quotes = await quoteVenues(t);
     if (quotes.size === 0) {
       rejected.noQuote++;
+      dropReason.noQuote++;
       return;
     }
     await db.insertOrder({
@@ -1037,6 +1047,9 @@ let lastSeenAuctionId = 0;
 let backfilled = 0;
 let settlementsSeen = 0;
 let settlementsDropped = 0;
+/** Why a settlement we saw never became a row. Nearly half were being discarded
+ *  and the counter could not say which step lost them. */
+const dropReason = { known: 0, lookup: 0, decimals: 0, noQuote: 0, other: 0 };
 let auctionsSeen = 0;
 let auctionInFlight = false;
 // Stagger the first poll. Both datasets are started by the same supervisor pass,
@@ -1082,7 +1095,9 @@ const status = setInterval(() => {
       `new=${rejected.newUids} rejected(lookup=${rejected.lookup} notOpen=${rejected.notOpen} ` +
       `expired=${rejected.expired} resting=${rejected.resting} noDecimals=${rejected.noDecimals} noQuote=${rejected.noQuote} tooFar=${rejected.tooFar} gaveUp=${rejected.giveUp}) ` +
       `kyberBudget=${kyberBudget.available}/${config.kyber.budgetPerWindow} (denied ${kyberBudget.denied}) ` +
-      `auctions=${auctionsSeen} backfilled=${backfilled} settlements=${settlementsSeen} dropped=${settlementsDropped} ` +
+      `auctions=${auctionsSeen} backfilled=${backfilled} settlements=${settlementsSeen} ` +
+      `dropped=${settlementsDropped}(known=${dropReason.known} lookup=${dropReason.lookup} ` +
+      `decimals=${dropReason.decimals} noQuote=${dropReason.noQuote}) ` +
       `bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'} ` +
       (db.storagePressure ? ` STORAGE-PRESSURE(${db.droppedTicks} dropped)` : '')
   );
