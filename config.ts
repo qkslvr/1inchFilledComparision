@@ -606,6 +606,18 @@ export const config = {
      *  polls is invisible unless it is fetched by id. Bounded so a long outage
      *  becomes a gap in the record rather than thousands of requests. */
     maxAuctionBackfill: 40,
+    /** New orders to look up per poll, before the poll returns.
+     *
+     *  Discovery runs inside pollAuction and each lookup waits on the shared
+     *  rate-limit slot, so an unbounded loop makes one poll take hours. With
+     *  1,558 backlog uids on Arbitrum the first poll would have run for 1.7
+     *  hours while auctionInFlight blocked every later one — after five minutes
+     *  of polling every 2.5s we had processed exactly one auction and seen one
+     *  settlement. Discovery is worthless if it stops us watching the auctions.
+     *
+     *  The remainder stay unseen and are picked up by later polls, which is
+     *  what the retry path already does for transient failures. */
+    maxConsiderPerPoll: 3,
     /** Ignore orders valid absurdly far into the future.
      *
      *  Not an asset filter — it says nothing about what is traded, only whether

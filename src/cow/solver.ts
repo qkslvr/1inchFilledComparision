@@ -963,8 +963,12 @@ async function pollAuction(): Promise<void> {
   // out waiting for the rate-limit slot, and every one was then ignored forever
   // even though nothing had been learned about it. Same for orders arriving
   // while the tracker was full.
+  let consideredThisPoll = 0;
   for (const uid of snap.orderUids) {
     if (seenUids.has(uid)) continue;
+    // Watching auctions matters more than draining the backlog. Leaving the
+    // rest unseen costs nothing: the next poll picks up where this one stopped.
+    if (consideredThisPoll >= config.cow.maxConsiderPerPoll) break;
     // Where the chain's solvable list lags, the backlog is the live flow: the
     // uids arriving at the head are already closed, and the open orders are the
     // ones sitting in the set we would otherwise skip.
@@ -976,6 +980,7 @@ async function pollAuction(): Promise<void> {
     // reconsidered when a slot frees up.
     if (tracked.size >= config.cow.solverMaxTracked) continue;
 
+    consideredThisPoll++;
     const verdict = await consider(uid).catch((err) => {
       logError(`consider ${uid.slice(0, 12)}`, err);
       return 'retry' as const;
