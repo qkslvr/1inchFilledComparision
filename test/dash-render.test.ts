@@ -79,7 +79,7 @@ test('an empty dataset renders instead of throwing', () => {
   const api = evalPage();
   const html = api.chainSection!(emptyChain, true) as string;
   assert.ok(html.length > 0);
-  assert.ok(html.includes('AUCTIONS SEEN'), 'the overview strip is missing');
+  assert.ok(html.includes('ORDERS TRACKED'), 'the overview strip is missing');
 });
 
 test('a populated dataset renders, including the target-solver strip', () => {
