@@ -322,8 +322,14 @@ function solverRow(o) {
     : o.won
       ? '<span class="chip win">would have won</span>'
       : '<span class="chip">outbid</span>';
-  var held = o.held === null ? '<span class="mut">—</span>'
+  var held = o.held === null ? '<span class="mut">\u2014</span>'
     : o.held ? '<span class="chip win">held</span>' : '<span class="chip short">slipped</span>';
+  function num(value, text, cls) {
+    return '<td class="num ' + (cls || '') + '" data-v="' + (value === null || value === undefined ? -1e9 : value) + '">' + text + '</td>';
+  }
+  // Cell order must match the headers array exactly — the dash-render test
+  // counts both. They drifted apart once and the table silently showed the
+  // venue under SIZE and the result under SURPLUS.
   return '<tr'
     + ' data-venue="' + esc(o.venue || '') + '"'
     + ' data-won="' + (o.won ? 'won' : 'lost') + '"'
@@ -331,18 +337,22 @@ function solverRow(o) {
     + ' data-text="' + esc(((o.pair || '') + ' ' + (o.venue || '')).toLowerCase()) + '">'
     + '<td>' + esc(o.time) + '</td>'
     + '<td>' + esc(o.pair || '') + '</td>'
-    + '<td class="num" data-v="' + (o.sizeUsd === null ? -1 : o.sizeUsd) + '">' + esc(usd(o.sizeUsd)) + '</td>'
+    + '<td>' + esc(o.kind || '') + '</td>'
+    + num(o.sizeUsd, esc(usd(o.sizeUsd)))
+    + num(o.surplusUsd, usdShort(o.surplusUsd))
+    + num(o.edgeUsd, usdShort(o.edgeUsd), o.edgeUsd > 0 ? 'pos' : o.edgeUsd < 0 ? 'neg' : '')
+    + num(o.feeUsd, usdShort(o.feeUsd))
     + '<td>' + esc(o.venue || '') + '</td>'
+    + num(o.rivalCount, o.rivalCount === null ? '\u2014' : String(o.rivalCount))
     + '<td>' + res + '</td>'
-    + '<td class="num" data-v="' + (o.marginBps === null ? -1e9 : o.marginBps) + '">'
-    + (o.noBid ? '<span class="mut">—</span>' : bps(o.marginBps)) + '</td>'
-    + '<td class="num" data-v="' + (o.slippageBps === null ? -1e9 : o.slippageBps) + '">' + bps(o.slippageBps) + '</td>'
+    + num(o.marginBps, o.noBid ? '<span class="mut">\u2014</span>' : bps(o.marginBps))
     + '<td>' + held + '</td>'
-    + '<td class="num" data-v="' + o.quoteRounds + '">' + o.quoteRounds + '</td>'
-    + '<td class="num" data-v="' + (o.bidLeadMs === null ? -1 : o.bidLeadMs) + '">' + (o.bidLeadMs === null ? '—' : (o.bidLeadMs / 1000).toFixed(0)) + '</td>'
-    + '<td class="num" data-v="' + (o.rivalCount === null ? -1 : o.rivalCount) + '">' + (o.rivalCount === null ? '—' : o.rivalCount) + '</td>'
+    + num(o.slippageBps, bps(o.slippageBps))
+    + num(o.quoteRounds, String(o.quoteRounds))
+    + num(o.bidLeadMs, o.bidLeadMs === null ? '\u2014' : (o.bidLeadMs / 1000).toFixed(0))
     + '</tr>';
 }
+
 
 /** Filter and sort state lives here, not in the DOM.
  *

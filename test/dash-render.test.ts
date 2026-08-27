@@ -82,6 +82,27 @@ test('an empty dataset renders instead of throwing', () => {
   assert.ok(html.includes('ORDERS TRACKED'), 'the overview strip is missing');
 });
 
+test('every table row has exactly as many cells as the header has columns', () => {
+  // They drifted apart silently: fifteen headers against eleven cells, so the
+  // venue appeared under SIZE and the result under SURPLUS, and every column
+  // after the gap was reading the wrong value.
+  const api = evalPage();
+  const row = api.solverRow!({
+    time: '10:00:00', tsMs: 1, pair: 'ETH_USDC', sizeUsd: 1000, venue: 'kyber', won: true,
+    noBid: false, marginBps: 12, solverCount: 8, rivalCount: 3, quoteRounds: 4, held: true,
+    slippageBps: 1, bidLeadMs: 5000, kind: 'sell', surplusUsd: 1.2, edgeUsd: 0.4, feeUsd: 0.5,
+  }) as string;
+  const cells = (row.match(/<td/g) ?? []).length;
+  const section = api.solverSection!({
+    chainId: 1, solver: { venues: [], target: null, rows: [], coverage: { tracked: 0, resolved: 0, bid: 0 },
+      overview: { auctionsSeen: 0, resolved: 0, bidsWon: 0, assetsSeen: 0, observedHours: 0, btcPct: null,
+        ethPct: null, stablePct: null, otherPct: null, classified: 0, volumeUsd: null, medianSizeUsd: null,
+        heldPct: null, heldWonPct: null, medianMarginBps: null, surplusUsd: null, feeUsd: null } },
+  }) as string;
+  const headerCells = (section.match(/<th class="sortable/g) ?? []).length;
+  assert.equal(cells, headerCells, `row emits ${cells} cells for ${headerCells} columns`);
+});
+
 test('a populated dataset renders, including the target-solver strip', () => {
   const api = evalPage();
   const withData = {
