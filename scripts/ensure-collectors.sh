@@ -37,14 +37,20 @@ if ! pgrep -f "tsx src/bebop/rela[y].ts" > /dev/null 2>&1; then
   sleep 3
 fi
 
-# The solver simulation: bids on open CoW orders before the winner is known,
-# then re-quotes afterwards to see whether the price would have held. Separate
-# entrypoint and separate schema from the shadow resolver.
-if ! pgrep -f "solver.ts --dataset=cowswapSolve[r]" > /dev/null 2>&1; then
-  echo "$(date -Is) ensure: cowswapSolver not running, starting" >> logs/ensure.log
-  setsid nohup env CHAIN=cowswapSolver npx tsx src/cow/solver.ts --dataset=cowswapSolver >> logs/collect-solver.log 2>&1 < /dev/null &
+# The Ethereum solver, off since 2026-08-27. Its ~13,000 orders stay in
+# cowswap_solver_1 and the dashboard keeps serving them; it simply stops
+# collecting new ones. Turned off so cicada has the CoW request budget and the
+# Arbitrum flow to itself:
+#
+#   SOLVER_CHAINS="cowswapSolver"
+#
+for chain in ${SOLVER_CHAINS:-}; do
+  if pgrep -f "solver.ts --dataset=$chain" > /dev/null 2>&1; then continue; fi
+  echo "$(date -Is) ensure: $chain solver not running, starting" >> logs/ensure.log
+  setsid nohup env CHAIN="$chain" npx tsx src/cow/solver.ts --dataset="$chain" \
+    >> "logs/collect-${chain}.log" 2>&1 < /dev/null &
   sleep 2
-fi
+done
 
 # Cicada: the same simulation pointed at Arbitrum and at one named solver.
 # Separate schema and separate process, so the Ethereum dataset is unaffected.

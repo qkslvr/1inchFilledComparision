@@ -326,7 +326,12 @@ const profiles: Record<string, ChainProfile> = {
     // than it produces anything, and every one of those requests was refused
     // while the busier mainnet dataset's went through — so the waste was not
     // merely wasteful, it was the reason this dataset collected nothing.
-    competitionPollMs: 90_000,
+    // Arbitrum decides an auction roughly every four minutes, but the orders in
+    // it close far sooner than that: polling at 90s, every one of 1,034 new
+    // uids was already notOpen by the time we looked it up. With the Ethereum
+    // dataset stopped there is no budget to share, so poll fast enough to catch
+    // an order while it is still live.
+    competitionPollMs: 15_000,
     // Above the ~15s structural floor, so it separates clean samples from
     // lagged ones. At 30s it sat below the old 41s floor and flagged every
     // single tick, which made the signal useless.
