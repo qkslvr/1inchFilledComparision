@@ -360,9 +360,10 @@ const profiles: Record<string, ChainProfile> = {
     // uids was already notOpen by the time we looked it up. With the Ethereum
     // dataset stopped there is no budget to share, so poll fast enough to catch
     // an order while it is still live.
-    competitionPollMs: 15_000,
     bidOnBacklog: true,
     quoteOnResolve: true,
+    // Auctions land every ~6s here; anything slower skips settlements outright.
+    competitionPollMs: 5_000,
     // Above the ~15s structural floor, so it separates clean samples from
     // lagged ones. At 30s it sat below the old 41s floor and flagged every
     // single tick, which made the signal useless.
@@ -595,6 +596,12 @@ export const config = {
      *  trade of $200, and that single row was the entire "total volume" figure
      *  on the dashboard. Above this we record no size rather than a false one. */
     maxBelievableSizeUsd: 25_000_000,
+    /** How many skipped auctions to fetch individually before giving up.
+     *
+     *  /latest returns only the newest auction, so anything decided between two
+     *  polls is invisible unless it is fetched by id. Bounded so a long outage
+     *  becomes a gap in the record rather than thousands of requests. */
+    maxAuctionBackfill: 40,
     /** Ignore orders valid absurdly far into the future.
      *
      *  Not an asset filter — it says nothing about what is traded, only whether

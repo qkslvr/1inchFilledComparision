@@ -35,7 +35,7 @@ import { fetchSignedOrder, type CowSignedOrder } from './orders.js';
 import { scoreOf, scoreOfBuy, scoreMarginBps, notionalNative, wouldHaveWon } from './score.js';
 import { tokenDecimals, tokenSymbol, weiToTokenViaUsd } from './tokens.js';
 import { takePollSlot } from './pollgate.js';
-import { getJson, HttpStatusError } from '../http/json.js';
+import { getJson, getJsonOrNull, HttpStatusError } from '../http/json.js';
 import { bpsOfCeil, ppmOfCeil, quoteForBaseCeil, rescale, toFloat } from '../pricing/units.js';
 import { buildDecidedOutcome, OUTCOME_ORDER_SQL, OUTCOME_TICK_SQL } from '../report/outcome.js';
 import { log, logError } from '../log.js';
@@ -897,28 +897,31 @@ async function pollAuction(): Promise<void> {
   }
   const snap = parseAuctionSnapshot(raw);
   if (!snap) return;
-  if (snap.prices.size > 0) latestPrices = snap.prices;
 
-  // t1 first: anything of ours that settled in this auction is now decided, and
-  // must stop accruing bids before we look at what else is open.
-  for (const s of snap.settled) {
-    const t = tracked.get(s.uid);
-    if (t) {
-      await resolve(t, snap, s.buyAmount);
-      continue;
-    }
-    // Where an order is only ever visible in the auction that settles it, there
-    // was no chance to bid on it beforehand — so quote now and compare anyway.
-    // Verified on Arbitrum: a settled uid is in that auction's solvable list and
-    // absent from the previous one, every time. Without this the dataset can
-    // never record anything, because the only orders it can see are already
-    // decided by the time it sees them.
-    if (config.cow.quoteOnResolve) {
-      await quoteAndResolveNow(s.uid, snap, s).catch((err) =>
-        logError(`late resolve ${s.uid.slice(0, 12)}`, err)
+  // /latest shows one auction. Arbitrum decides one roughly every six seconds,
+  // so any poll interval above that silently skips auctions — and a skipped
+  // auction is a settlement we never see. CoW settles ~52 trades an hour on
+  // Arbitrum and we were recording two, because we were only ever looking at
+  // the newest auction and ignoring every one in between.
+  //
+  // Auction ids are fetchable individually, so fill the gap rather than racing
+  // it. Bounded, because a long outage must not turn into thousands of requests.
+  if (lastSeenAuctionId > 0 && snap.competition.auctionId > lastSeenAuctionId + 1) {
+    const from = Math.max(lastSeenAuctionId + 1, snap.competition.auctionId - config.cow.maxAuctionBackfill);
+    for (let id = from; id < snap.competition.auctionId; id++) {
+      const gap = await getJsonOrNull<Parameters<typeof parseAuctionSnapshot>[0]>(
+        `${config.cow.apiBase}/${config.cow.chainSlug}/api/v2/solver_competition/${id}`
       );
+      const gapSnap = gap ? parseAuctionSnapshot(gap) : null;
+      if (!gapSnap) continue; // many ids simply hold no auction
+      backfilled++;
+      await settleFrom(gapSnap);
     }
   }
+  lastSeenAuctionId = Math.max(lastSeenAuctionId, snap.competition.auctionId);
+  if (snap.prices.size > 0) latestPrices = snap.prices;
+
+  await settleFrom(snap);
 
   // Free slots held by orders that are not going to resolve. Without this the
   // tracker fills once and never turns over, and nothing ever gets graded.
@@ -999,6 +1002,26 @@ async function pollAuction(): Promise<void> {
   if (seenUids.size > 50_000) seenUids.clear();
 }
 
+/** Grade every settlement in one auction, whether it arrived live or as backfill. */
+async function settleFrom(snap: CowAuctionSnapshot): Promise<void> {
+  for (const s of snap.settled) {
+    const t = tracked.get(s.uid);
+    if (t) {
+      await resolve(t, snap, s.buyAmount);
+      continue;
+    }
+    // Where an order is only ever visible in the auction that settles it, there
+    // was no chance to bid beforehand — quote now and compare anyway.
+    if (config.cow.quoteOnResolve) {
+      await quoteAndResolveNow(s.uid, snap, s).catch((err) =>
+        logError(`late resolve ${s.uid.slice(0, 12)}`, err)
+      );
+    }
+  }
+}
+
+let lastSeenAuctionId = 0;
+let backfilled = 0;
 let auctionInFlight = false;
 // Stagger the first poll. Both datasets are started by the same supervisor pass,
 // so without this they tick in lockstep forever and every collision is mutual.
@@ -1043,7 +1066,7 @@ const status = setInterval(() => {
       `new=${rejected.newUids} rejected(lookup=${rejected.lookup} notOpen=${rejected.notOpen} ` +
       `expired=${rejected.expired} resting=${rejected.resting} noDecimals=${rejected.noDecimals} noQuote=${rejected.noQuote} tooFar=${rejected.tooFar} gaveUp=${rejected.giveUp}) ` +
       `kyberBudget=${kyberBudget.available}/${config.kyber.budgetPerWindow} (denied ${kyberBudget.denied}) ` +
-      `pollSlotSkips=${slotDenied} ` +
+      `pollSlotSkips=${slotDenied} backfilled=${backfilled} ` +
       `bebop=${bebop.enabled ? `${bebop.state}/${bebop.books.size}pairs` : 'off'} ` +
       (db.storagePressure ? ` STORAGE-PRESSURE(${db.droppedTicks} dropped)` : '')
   );
