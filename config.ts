@@ -360,16 +360,19 @@ const profiles: Record<string, ChainProfile> = {
         ticker: 'ETH_USDC',
         base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ARB, NATIVE_SENTINEL] },
         quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ARB] },
+        kalqix: { ticker: 'ETH_USDC', baseDecimals: 18, quoteDecimals: 6 },
       },
       {
         ticker: 'ETH_USDT',
         base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ARB, NATIVE_SENTINEL] },
         quote: { symbol: 'USDT', decimals: 6, addresses: [USDT_ARB] },
+        kalqix: { ticker: 'ETH_USDC', baseDecimals: 18, quoteDecimals: 6 },
       },
       {
         ticker: 'WBTC_USDC',
         base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ARB] },
         quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ARB] },
+        kalqix: { ticker: 'cbBTC_USDC', baseDecimals: 8, quoteDecimals: 6 },
       },
       {
         ticker: 'ARB_USDC',
@@ -386,14 +389,14 @@ const profiles: Record<string, ChainProfile> = {
     // chain: both read from the relay so neither can lock the other out.
     bebopChainSlug: 'arbitrum',
     bebopMode: 'stream',
-    venues: ['kyber', 'bebop'],
+    venues: ['kalqix', 'kyber', 'bebop'],
     nativeTicker: 'ETH_USDC',
     nativeSymbol: 'ETH',
     stableSymbol: 'USDC',
     kyberOnlySkipPairs: [],
     reportCaveats: [
       'This measures one Arbitrum solver, 0x4cdaf5df…, rather than the field. For every order they bid on we ask whether our liquidity could have beaten the price they themselves proposed — so the bar is their bid, not the auction winner\'s.',
-      'KalqiX has no Arbitrum market and Bebop lists only thirteen tokens there, so this is effectively a KyberSwap comparison. The solver trades mostly USDC and WETH, which both venues do cover.',
+      'KalqiX runs no Arbitrum market, so its ETH and BTC books are used as an independent price for the same assets settled elsewhere — the same cross-chain basis the Ethereum dataset already accepts for Base, and inventory and rebalancing costs are ignored. Bebop lists thirteen tokens on Arbitrum; Kyber quotes the rest.',
       'We never submit a solution. A win here means our price beat theirs on the same order, not that the auction would have resolved differently once other solvers responded.',
     ],
 

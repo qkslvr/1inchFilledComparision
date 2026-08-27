@@ -29,6 +29,12 @@ import { logError } from '../log.js';
 
 const agent = new https.Agent({ keepAlive: true, maxSockets: 4 });
 
+/** Node's https module sends no User-Agent at all, and an absent one reads as a
+ *  bot to the edges in front of these APIs: KyberSwap answered 403 to every
+ *  request without it and 200 to the same request with any value, curl-like or
+ *  browser-like. Naming ourselves honestly is both the fix and the courtesy. */
+const USER_AGENT = 'shadow-resolver/1.0 (+research; contact via cow.fi discord)';
+
 export class HttpStatusError extends Error {
   constructor(readonly status: number) {
     super(`HTTP ${status}`);
@@ -49,7 +55,7 @@ export function getJson<T>(
         path: u.pathname + u.search,
         method: 'GET',
         agent,
-        headers: { Accept: 'application/json', ...headers },
+        headers: { Accept: 'application/json', 'User-Agent': USER_AGENT, ...headers },
       },
       (res) => {
         const status = res.statusCode ?? 0;
