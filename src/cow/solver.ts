@@ -821,7 +821,10 @@ async function pollAuction(): Promise<void> {
   // while the tracker was full.
   for (const uid of snap.orderUids) {
     if (seenUids.has(uid)) continue;
-    if (!seeded) {
+    // Where the chain's solvable list lags, the backlog is the live flow: the
+    // uids arriving at the head are already closed, and the open orders are the
+    // ones sitting in the set we would otherwise skip.
+    if (!seeded && !config.cow.bidOnBacklog) {
       seenUids.add(uid); // startup backlog: noted, never bid on
       continue;
     }

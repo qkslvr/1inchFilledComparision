@@ -61,6 +61,15 @@ interface ChainProfile {
   targetSolver?: string;
   /** Override the auction poll interval where the chain warrants it. */
   competitionPollMs?: number;
+  /** Consider orders already in the solvable set, not only new arrivals.
+   *
+   *  Ignoring the backlog is right on mainnet, where it is ~7,700 long-dated
+   *  limit orders resting far from market and the live flow arrives as new
+   *  uids. On Arbitrum the list lags: the uids that appear at the head are
+   *  already fulfilled, expired or cancelled by the time we read them, while
+   *  genuinely open orders with many minutes left sit in the standing set. Only
+   *  bidding on arrivals there means bidding on nothing. */
+  bidOnBacklog?: boolean;
   /** PancakeSwap V3 QuoterV2, on chains where it is deployed. */
   pancakeQuoter?: string;
   /** PancakeSwap V3 fee tiers, in hundredths of a bip. */
@@ -332,6 +341,7 @@ const profiles: Record<string, ChainProfile> = {
     // dataset stopped there is no budget to share, so poll fast enough to catch
     // an order while it is still live.
     competitionPollMs: 15_000,
+    bidOnBacklog: true,
     // Above the ~15s structural floor, so it separates clean samples from
     // lagged ones. At 30s it sat below the old 41s floor and flagged every
     // single tick, which made the signal useless.
@@ -513,6 +523,7 @@ export const config = {
     apiBase: 'https://api.cow.fi',
     chainSlug: profile.cowChainSlug ?? 'mainnet',
     targetSolver: profile.targetSolver?.toLowerCase() ?? null,
+    bidOnBacklog: profile.bidOnBacklog === true,
     /** quotes need a from/receiver to be returned; nothing is signed or sent */
     quoteFrom: '0x0000000000000000000000000000000000000001',
     feeBps: 5n,
