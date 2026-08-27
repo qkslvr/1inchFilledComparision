@@ -90,6 +90,10 @@ for (const pair of kalqixPairs) {
 
 await gas.start();
 await refPrices.start();
+// Chains without a KalqiX book have no reference price, so seed one from Kyber
+// and keep it fresh; nothing can be costed without it.
+await refreshNativeUsd();
+const nativeUsdTimer = setInterval(() => void refreshNativeUsd(), 180_000);
 await bebop.start();
 for (const m of marketSamplers.values()) m.sampler.setActive(true);
 
@@ -138,10 +142,40 @@ function sizeUsdFromQuote(quotes: Map<Venue, VenueQuote>): number | null {
   return usd6 === null || usd6 === undefined || usd6 <= 0n ? null : toFloat(usd6, 6);
 }
 
+/** Native token price in 6dp dollars.
+ *
+ *  RefPriceLoop gets this from a KalqiX book, which only exists on the chains
+ *  KalqiX lists. On Arbitrum there is none, so every gas conversion returned
+ *  null, so every venue quote was discarded and the dataset recorded nothing at
+ *  all while reporting noQuote. Kyber already prices any chain it supports, so
+ *  ask it — one quote every few minutes, cached. */
+let nativeUsdCache: { usd6: bigint; atMs: number } | null = null;
+async function refreshNativeUsd(): Promise<void> {
+  const weth = config.wethAddress;
+  const stable = config.pairs.find((p) => STABLES.has(p.quote.symbol))?.quote;
+  if (!stable) return;
+  try {
+    const q = await fetchKyberQuote(weth, stable.addresses[0]!, 10n ** 18n, { retries: 0 });
+    if (q.amountOut > 0n) {
+      nativeUsdCache = { usd6: rescale(q.amountOut, stable.decimals, 6), atMs: Date.now() };
+    }
+  } catch {
+    // Leave the previous value in place; a stale native price is far better
+    // than no venue quotes at all.
+  }
+}
+
+function nativeUsd6(): bigint | undefined {
+  const mid = refPrices.latestMid.get(config.nativeTicker);
+  if (mid !== undefined) return mid.mid;
+  return nativeUsdCache?.usd6;
+}
+
 function weiToToken(wei: bigint, decimals: number, symbol: string): bigint | null {
   if (symbol === config.nativeSymbol) return wei;
-  const mid = refPrices.latestMid.get(config.nativeTicker);
-  if (mid === undefined) return null;
+  const usd6 = nativeUsd6();
+  if (usd6 === undefined) return null;
+  const mid = { mid: usd6 };
   const inDollars = quoteForBaseCeil(wei, mid.mid, 18);
   if (STABLES.has(symbol)) return rescale(inDollars, 6, decimals);
   return null;
@@ -236,10 +270,10 @@ async function quoteVenues(t: {
     // it is right there in the response.
     const venueGas =
       weiToToken(q.gasUnits * gasPriceWei, buyDecimals, buySymbol) ??
-      weiToTokenViaUsd(q.gasUnits * gasPriceWei, refPrices.latestMid.get(config.nativeTicker)?.mid, q.amountOut, q.amountOutUsd6);
+      weiToTokenViaUsd(q.gasUnits * gasPriceWei, nativeUsd6(), q.amountOut, q.amountOutUsd6);
     const fillGasHere =
       fillGas ||
-      weiToTokenViaUsd(config.gasUnits * gasPriceWei, refPrices.latestMid.get(config.nativeTicker)?.mid, q.amountOut, q.amountOutUsd6) ||
+      weiToTokenViaUsd(config.gasUnits * gasPriceWei, nativeUsd6(), q.amountOut, q.amountOutUsd6) ||
       0n;
     if (venueGas !== null) {
       const fee = bpsOfCeil(q.amountOut, config.kyber.feeBps);
@@ -354,9 +388,9 @@ function bidScore(t: Tracked, q: VenueQuote, prices: Map<string, bigint>): bigin
   // recognise, so fall back to the quote's own dollar rate on the output and
   // convert across at the order's own implied price.
   const gasInSell =
-    weiToTokenViaUsd(q.gasWei, refPrices.latestMid.get(config.nativeTicker)?.mid, q.out, q.outUsd6) === null
+    weiToTokenViaUsd(q.gasWei, nativeUsd6(), q.out, q.outUsd6) === null
       ? null
-      : ((weiToTokenViaUsd(q.gasWei, refPrices.latestMid.get(config.nativeTicker)?.mid, q.out, q.outUsd6) as bigint) *
+      : ((weiToTokenViaUsd(q.gasWei, nativeUsd6(), q.out, q.outUsd6) as bigint) *
           t.order.sellAmount) /
         (q.out === 0n ? 1n : q.out);
   if (gasInSell === null) return null;
@@ -600,7 +634,7 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
 
   // Scores are native wei, so the reference ETH price turns them into money.
   // This is what the trade is actually worth, rather than bps of something.
-  const ethUsd6 = refPrices.latestMid.get(config.nativeTicker)?.mid;
+  const ethUsd6 = nativeUsd6();
   const toUsd = (wei: bigint | null): number | null =>
     wei === null || ethUsd6 === undefined ? null : toFloat(wei, 18) * toFloat(ethUsd6, 6);
   const feeUsd =
@@ -906,6 +940,7 @@ process.on('SIGINT', () => {
   if (shuttingDown) process.exit(1);
   shuttingDown = true;
   log('SIGINT: shutting down...');
+  clearInterval(nativeUsdTimer);
   clearInterval(auctionTimer);
   clearInterval(quoteTimer);
   clearInterval(status);

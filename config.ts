@@ -98,6 +98,14 @@ const ETH_BSC = '0x2170ed0880ac9a755fd29b2688956bd959f933f8';
 /** PancakeSwap deploys its V3 QuoterV2 at the same address on every chain. */
 const PANCAKE_QUOTER = '0xb048bbc1ee6b733fffcfb9e9cef7375518e25997';
 
+// Arbitrum. Different addresses entirely from Ethereum, and USDC here is the
+// native one rather than the bridged USDC.e.
+const WETH_ARB = '0x82af49447d8a07e3bd95bd0d56f35241523fbab1';
+const USDC_ARB = '0xaf88d065e77c8cc2239327c5edb3a432268e5831';
+const USDT_ARB = '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9';
+const WBTC_ARB = '0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f';
+const ARB_ARB  = '0x912ce59144191c1204e64559fe8253a0e49e6548';
+
 const profiles: Record<string, ChainProfile> = {
   ethereum: {
     chainId: 1,
@@ -346,42 +354,27 @@ const profiles: Record<string, ChainProfile> = {
     // lagged ones. At 30s it sat below the old 41s floor and flagged every
     // single tick, which made the signal useless.
     quoteLagToleranceMs: 25_000,
-    wethAddress: WETH_ETHEREUM,
+    wethAddress: WETH_ARB,
     pairs: [
       {
         ticker: 'ETH_USDC',
-        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
-        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ETHEREUM] },
+        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ARB, NATIVE_SENTINEL] },
+        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ARB] },
       },
-      {
-        ticker: 'cbBTC_USDC',
-        base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
-        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ETHEREUM] },
-      },
-      // KalqiX lists only ETH/USDC and cbBTC/USDC, but a dollar is a dollar for
-      // our purposes, so the USDT and DAI pairs are priced off the same books.
-      // Note the decimals: DAI is 18dp against USDC's 6dp, which rescaleBook
-      // handles — get that wrong and every DAI figure is out by 10^12.
       {
         ticker: 'ETH_USDT',
-        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
-        quote: { symbol: 'USDT', decimals: 6, addresses: [USDT_ETHEREUM] },
+        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ARB, NATIVE_SENTINEL] },
+        quote: { symbol: 'USDT', decimals: 6, addresses: [USDT_ARB] },
       },
       {
-        ticker: 'ETH_DAI',
-        base: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM, NATIVE_SENTINEL] },
-        quote: { symbol: 'DAI', decimals: 18, addresses: [DAI_ETHEREUM] },
+        ticker: 'WBTC_USDC',
+        base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ARB] },
+        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ARB] },
       },
       {
-        ticker: 'WBTC_USDT',
-        base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
-        quote: { symbol: 'USDT', decimals: 6, addresses: [USDT_ETHEREUM] },
-      },
-      {
-        // crypto-crypto, so there is no stable leg and its USD notional is null
-        ticker: 'WBTC_ETH',
-        base: { symbol: 'WBTC', decimals: 8, addresses: [WBTC_ETHEREUM] },
-        quote: { symbol: 'ETH', decimals: 18, addresses: [WETH_ETHEREUM] },
+        ticker: 'ARB_USDC',
+        base: { symbol: 'ARB', decimals: 18, addresses: [ARB_ARB] },
+        quote: { symbol: 'USDC', decimals: 6, addresses: [USDC_ARB] },
       },
     ],
     rpcEnvVar: 'ARB_RPC_URL',
