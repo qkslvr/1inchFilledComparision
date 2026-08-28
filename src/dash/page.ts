@@ -214,6 +214,9 @@ function ov(label, value, sub) {
 function usdShort(v) {
   if (v === null || v === undefined) return '\u2014';
   var a = Math.abs(v);
+  // Below a cent is zero, not a signed near-miss. It was rendering "$-0.00",
+  // which reads as a loss and is really just rounding.
+  if (a < 0.005) return '$0.00';
   if (a >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
   if (a >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'k';
   return '$' + v.toFixed(2);
@@ -268,9 +271,12 @@ function solverCard(v) {
 function batchRow(b) {
   // Rank is what a batch view is for: losing to seven solvers and losing to one
   // are different outcomes, and an order-level win/lose flag hides that.
-  var rank = b.bestRank === null ? '<span class="mut">\u2014</span>'
-    : b.bestRank === 1 ? '<span class="chip win">1st of ' + (b.solvers || '?') + '</span>'
-    : '<span class="chip">' + b.bestRank + ' of ' + (b.solvers || '?') + '</span>';
+  // The field includes us: ranking 2nd against a single rival is "2 of 2", not
+  // "2 of 1", which is what it read before.
+  var field = b.solvers === null ? null : b.solvers + 1;
+  var rank = b.bestRank === null || field === null ? '<span class="mut">\u2014</span>'
+    : b.bestRank === 1 ? '<span class="chip win">1st of ' + field + '</span>'
+    : '<span class="chip">' + b.bestRank + ' of ' + field + '</span>';
   function num(v, text, cls) {
     return '<td class="num ' + (cls || '') + '" data-v="' + (v === null || v === undefined ? -1e9 : v) + '">' + text + '</td>';
   }
@@ -286,7 +292,7 @@ function batchRow(b) {
     + num(b.solvers, b.solvers === null ? '\u2014' : String(b.solvers))
     + '<td>' + rank + '</td>'
     + num(b.surplusUsd, usdShort(b.surplusUsd))
-    + num(b.edgeUsd, usdShort(b.edgeUsd), b.edgeUsd > 0 ? 'pos' : b.edgeUsd < 0 ? 'neg' : '')
+    + num(b.edgeUsd, usdShort(b.edgeUsd), b.edgeUsd > 0.005 ? 'pos' : b.edgeUsd < -0.005 ? 'neg' : '')
     + '<td>' + (b.targetBid ? '<span class="chip win">yes</span>' : '<span class="mut">\u2014</span>') + '</td>'
     + '</tr>';
 }
@@ -386,7 +392,7 @@ function solverRow(o) {
     + num(o.surplusUsd, usdShort(o.surplusUsd))
     + num(o.feeUsd, usdShort(o.feeUsd))
     + num(o.edgeUsd, o.noBid ? '<span class="mut">\u2014</span>' : usdShort(o.edgeUsd),
-          o.edgeUsd > 0 ? 'pos' : o.edgeUsd < 0 ? 'neg' : '')
+          o.edgeUsd > 0.005 ? 'pos' : o.edgeUsd < -0.005 ? 'neg' : '')
     + '<td>' + esc(o.venue || '') + '</td>'
     + num(o.rivalCount, o.rivalCount === null ? '\u2014' : String(o.rivalCount))
     + '<td>' + res + '</td>'
