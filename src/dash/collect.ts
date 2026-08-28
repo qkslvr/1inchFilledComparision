@@ -417,7 +417,7 @@ const isEth = (s: string | null) => {
 };
 
 async function collectSolver(db: Db) {
-  const [venueRows, holdRows, rows, coverage, classRows, assetRows, holdTotals, target] = await Promise.all([
+  const [venueRows, holdRows, rows, coverage, classRows, assetRows, holdTotals, target, batchRows] = await Promise.all([
     // A row whose score was zero never carried a bid, so it is neither a win
     // nor a loss and has no margin. Counting it as a bid understates every
     // win rate; letting its -10000 bps into the median destroys it.
@@ -475,6 +475,25 @@ async function collectSolver(db: Db) {
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY vs_target_bps) AS median_vs_bps,
                    sum(edge_usd) FILTER (WHERE beat_target) AS edge_usd
             FROM orders WHERE resolved_at_ms IS NOT NULL`),
+    // One row per auction — the batch — rather than per order. Arbitrum settles
+    // one order in ~90% of batches and two in the rest, so this mostly reframes
+    // rather than re-aggregates; the ladder is what it adds.
+    db.all(`SELECT o.cow_auction_id AS auction_id,
+                   max(o.resolved_at_ms) AS resolved_at_ms,
+                   count(*) AS orders_in_batch,
+                   sum(o.size_usd) AS size_usd,
+                   sum(o.surplus_usd) AS surplus_usd,
+                   sum(o.edge_usd) AS edge_usd,
+                   max(o.cow_solver_count) AS solvers,
+                   min(o.our_rank) AS best_rank,
+                   max(o.rival_count) AS rivals,
+                   count(*) FILTER (WHERE o.won = 1) AS orders_we_win,
+                   string_agg(DISTINCT o.pair, ', ') AS pairs,
+                   string_agg(DISTINCT o.our_best_venue, ', ') AS venues,
+                   bool_or(o.target_bid) AS target_bid
+            FROM orders o
+            WHERE o.resolved_at_ms IS NOT NULL AND o.cow_auction_id IS NOT NULL
+            GROUP BY 1 ORDER BY 2 DESC LIMIT 500`),
   ]);
 
   // One pass over the pair counts, so each order lands in exactly one bucket.
@@ -567,6 +586,22 @@ async function collectSolver(db: Db) {
 
   return {
     venues,
+    batches: batchRows.map((b) => ({
+      auctionId: Number(b.auction_id),
+      time: new Date(Number(b.resolved_at_ms)).toISOString().slice(11, 19),
+      tsMs: Number(b.resolved_at_ms),
+      orders: Number(b.orders_in_batch),
+      pairs: b.pairs,
+      venues: b.venues,
+      sizeUsd: b.size_usd === null ? null : Number(b.size_usd),
+      surplusUsd: b.surplus_usd === null ? null : Number(b.surplus_usd),
+      edgeUsd: b.edge_usd === null ? null : Number(b.edge_usd),
+      solvers: b.solvers === null ? null : Number(b.solvers),
+      rivals: b.rivals === null ? null : Number(b.rivals),
+      bestRank: b.best_rank === null ? null : Number(b.best_rank),
+      ordersWeWin: Number(b.orders_we_win),
+      targetBid: b.target_bid === true,
+    })),
     target: targetStats,
     overview: {
       auctionsSeen: Number(coverage?.tracked ?? 0),

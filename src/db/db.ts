@@ -738,6 +738,28 @@ export class Db {
     );
   }
 
+  /** One row per rival proposal on this order — the batch's whole ladder. */
+  insertSolutionBid(
+    orderHash: string,
+    solver: string,
+    ranking: number | null,
+    isWinner: boolean,
+    buyAmount: bigint,
+    sellAmount: bigint,
+    score: bigint | null
+  ): void {
+    this.enqueue(
+      `INSERT INTO solution_bids (order_hash, solver, ranking, is_winner, buy_amount, sell_amount, score)
+       VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (order_hash, solver) DO NOTHING`,
+      [orderHash, solver, ranking, isWinner ? 1 : 0, s(buyAmount), s(sellAmount), s(score)]
+    );
+  }
+
+  /** Where our score would have slotted into that ladder. */
+  recordOurRank(orderHash: string, rank: number | null): void {
+    this.enqueue(`UPDATE orders SET our_rank = ? WHERE order_hash = ?`, [rank, orderHash]);
+  }
+
   insertQuoteHold(
     orderHash: string,
     venue: string,

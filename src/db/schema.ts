@@ -96,6 +96,22 @@ export const MIGRATIONS: string[] = [
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS target_rank INTEGER`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS beat_target BOOLEAN`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS vs_target_bps DOUBLE PRECISION`,
+  // Where our bid would have slotted into the field, not just whether it beat
+  // the top of it. "Third of eight" is a different claim from "did not win".
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS our_rank INTEGER`,
+  // Every proposal on every order, so a batch can show the whole ladder rather
+  // than the maximum. We were computing the best rival and discarding the rest.
+  `CREATE TABLE IF NOT EXISTS solution_bids (
+     order_hash  TEXT NOT NULL REFERENCES orders(order_hash),
+     solver      TEXT NOT NULL,
+     ranking     INTEGER,
+     is_winner   SMALLINT,
+     buy_amount  TEXT,
+     sell_amount TEXT,
+     score       TEXT,
+     PRIMARY KEY (order_hash, solver)
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_bids_order ON solution_bids(order_hash)`,
   `ALTER TABLE quote_holds ADD COLUMN IF NOT EXISTS won SMALLINT`,
   `CREATE INDEX IF NOT EXISTS idx_holds_checked ON quote_holds(checked_at_ms DESC)`,
 ];
@@ -200,7 +216,19 @@ CREATE TABLE IF NOT EXISTS orders (
   target_score       TEXT,
   target_rank        INTEGER,
   beat_target        BOOLEAN,
-  vs_target_bps      DOUBLE PRECISION
+  vs_target_bps      DOUBLE PRECISION,
+  our_rank           INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS solution_bids (
+  order_hash  TEXT NOT NULL REFERENCES orders(order_hash),
+  solver      TEXT NOT NULL,
+  ranking     INTEGER,
+  is_winner   SMALLINT,
+  buy_amount  TEXT,
+  sell_amount TEXT,
+  score       TEXT,
+  PRIMARY KEY (order_hash, solver)
 );
 
 CREATE TABLE IF NOT EXISTS quote_holds (

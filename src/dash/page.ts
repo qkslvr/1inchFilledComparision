@@ -265,6 +265,50 @@ function solverCard(v) {
     + '</div>';
 }
 
+function batchRow(b) {
+  // Rank is what a batch view is for: losing to seven solvers and losing to one
+  // are different outcomes, and an order-level win/lose flag hides that.
+  var rank = b.bestRank === null ? '<span class="mut">\u2014</span>'
+    : b.bestRank === 1 ? '<span class="chip win">1st of ' + (b.solvers || '?') + '</span>'
+    : '<span class="chip">' + b.bestRank + ' of ' + (b.solvers || '?') + '</span>';
+  function num(v, text, cls) {
+    return '<td class="num ' + (cls || '') + '" data-v="' + (v === null || v === undefined ? -1e9 : v) + '">' + text + '</td>';
+  }
+  return '<tr'
+    + ' data-text="' + esc(((b.pairs || '') + ' ' + (b.venues || '')).toLowerCase()) + '"'
+    + ' data-won="' + (b.ordersWeWin > 0 ? 'won' : 'lost') + '"'
+    + ' data-venue="' + esc((b.venues || '').split(',')[0].trim()) + '" data-held="">'
+    + '<td>' + esc(b.time) + '</td>'
+    + '<td class="mut">' + b.auctionId + '</td>'
+    + num(b.orders, String(b.orders))
+    + '<td>' + esc(b.pairs || '') + '</td>'
+    + num(b.sizeUsd, esc(usd(b.sizeUsd)))
+    + num(b.solvers, b.solvers === null ? '\u2014' : String(b.solvers))
+    + '<td>' + rank + '</td>'
+    + num(b.surplusUsd, usdShort(b.surplusUsd))
+    + num(b.edgeUsd, usdShort(b.edgeUsd), b.edgeUsd > 0 ? 'pos' : b.edgeUsd < 0 ? 'neg' : '')
+    + '<td>' + (b.targetBid ? '<span class="chip win">yes</span>' : '<span class="mut">\u2014</span>') + '</td>'
+    + '</tr>';
+}
+
+function batchSection(c) {
+  var b = c.solver.batches || [];
+  if (!b.length) return '';
+  var h = '<div class="eyebrow">BATCHES</div>';
+  h += '<p class="mut" style="font-size:12px;margin:0 0 8px;line-height:1.7">'
+    + 'One row per auction rather than per order. CoW settles a batch at a time; on this chain a batch is a single order about 90% of the time and two in the rest.<br>'
+    + '<b>rank</b> is where our bid would have placed among the solvers who bid on that batch \u2014 losing to seven is not the same outcome as losing to one. <b>target</b> marks batches the solver we are measuring against took part in.'
+    + '</p>';
+  var headers = ['TIME', 'AUCTION', '$ORDERS', 'PAIRS', '$SIZE', '$SOLVERS', 'OUR RANK', '$SURPLUS', '$EDGE', 'TARGET'];
+  h += '<table id="batchtbl"><thead><tr>'
+    + headers.map(function (t, i) {
+        var n = t.charAt(0) === '$';
+        return '<th class="sortable' + (n ? ' num' : '') + '" onclick="sortTable(this, ' + i + ')">' + esc(t.replace('$', '')) + '<span class="ind"></span></th>';
+      }).join('')
+    + '</tr></thead><tbody>' + b.map(batchRow).join('') + '</tbody></table>';
+  return h;
+}
+
 function solverSection(c) {
   var s = c.solver;
   var h = overviewCard(c);
@@ -285,6 +329,7 @@ function solverSection(c) {
   }
   h += '<div class="eyebrow">BY VENUE</div>';
   h += '<div class="cards">' + s.venues.map(solverCard).join('') + '</div>';
+  h += batchSection(c);
   h += '<div class="eyebrow">TRADES</div>';
   h += '<p class="mut" style="font-size:12px;margin:0 0 8px;line-height:1.7">'
     + 'Sell 1 ETH with a $2,500 limit, best venue quoting $2,510: <b>size</b> $2,500, <b>fee</b> $1.26 (our 5 bps, the only money we earn), <b>surplus</b> $6.74 handed to the user above their limit, and <b>edge</b> the dollars of that surplus beyond what the best rival offered on this same order.<br>'
@@ -360,7 +405,12 @@ var filterState = { q: '', venue: '', result: '', held: '' };
 var pageState = { page: 1, size: 25 };
 var sortState = { col: -1, dir: -1 };
 function sortSolver(col) {
-  var tbl = document.getElementById('solvertbl');
+  var t = document.getElementById('solvertbl');
+  if (t) sortTable(t.tHead.rows[1].cells[col], col);
+}
+
+function sortTable(el, col) {
+  var tbl = el && el.closest ? el.closest('table') : document.getElementById('solvertbl');
   if (!tbl) return;
   sortState.dir = sortState.col === col ? -sortState.dir : -1;
   sortState.col = col;

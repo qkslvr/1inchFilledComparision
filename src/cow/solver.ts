@@ -582,14 +582,26 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
   const proposals = snap.proposalsByOrder.get(t.order.uid) ?? [];
   let bestRivalScore: bigint | null = null;
   let bestRivalSolver: string | null = null;
+  // Keep the whole ladder, not just its top. "We would have ranked third of
+  // eight" is a different and more useful claim than "we did not win", and the
+  // batch view has nothing to show without it.
+  const ladder: Array<{ solver: string; score: bigint | null }> = [];
   for (const p of proposals) {
     const rs = rivalScore(t, p, prices);
+    ladder.push({ solver: p.solver, score: rs });
+    db.insertSolutionBid(t.order.uid, p.solver, p.ranking, p.isWinner, p.buyAmount, p.sellAmount, rs);
     if (rs === null) continue;
     if (bestRivalScore === null || rs > bestRivalScore) {
       bestRivalScore = rs;
       bestRivalSolver = p.solver;
     }
   }
+  // Rank counts how many rivals we would have been behind, so 1 means we top it.
+  const ourRank =
+    ourScore === null
+      ? null
+      : 1 + ladder.filter((l) => l.score !== null && l.score > ourScore!).length;
+  db.recordOurRank(t.order.uid, ourRank);
 
   const won = wouldHaveWon(ourScore, bestRivalScore);
   // A zero score means our best venue could not clear the user's limit at all.
