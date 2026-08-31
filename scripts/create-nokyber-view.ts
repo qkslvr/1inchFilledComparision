@@ -74,7 +74,9 @@ const select = cols
 const SQL = `
 CREATE SCHEMA IF NOT EXISTS ${DST};
 
-CREATE OR REPLACE VIEW ${DST}.orders AS
+DROP MATERIALIZED VIEW IF EXISTS ${DST}.orders CASCADE;
+DROP VIEW IF EXISTS ${DST}.orders CASCADE;
+CREATE MATERIALIZED VIEW ${DST}.orders AS
 WITH bid_tick AS (
   -- The tick that formed the bid: the last one at or before we bid.
   SELECT DISTINCT ON (t.order_hash) t.order_hash,
@@ -140,10 +142,18 @@ SELECT ${select}
 FROM ${SRC}.orders o
 JOIN alt a          ON a.order_hash = o.order_hash
 LEFT JOIN verdict v ON v.order_hash = o.order_hash;
+
+-- The dashboard runs about ten queries per dataset per refresh, and as a plain
+-- view each one re-ran the whole CTE chain: data.json took 21.8s. Materialised
+-- it is a table scan. The unique index is what lets the refresh run CONCURRENTLY,
+-- so the dashboard never reads a half-built relation.
+CREATE UNIQUE INDEX IF NOT EXISTS nokyber_orders_pk ON ${DST}.orders (order_hash);
+CREATE INDEX IF NOT EXISTS nokyber_orders_resolved ON ${DST}.orders (resolved_at_ms);
+CREATE INDEX IF NOT EXISTS nokyber_orders_auction ON ${DST}.orders (cow_auction_id);
 `;
 
 await c.query(SQL);
-console.log(`${DST}.orders created (${cols.length} columns, ${Object.keys(OVERRIDE).length} recomputed)`);
+console.log(`${DST}.orders materialised (${cols.length} columns, ${Object.keys(OVERRIDE).length} recomputed)`);
 
 // Everything else passes straight through, so any query the dashboard makes
 // resolves inside this schema rather than falling back to the real one.
