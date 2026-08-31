@@ -17,7 +17,13 @@
  *    `solution_bids` knows about. The reconstructed set is a subset, which
  *    flatters us. `batch_size` records how much of it we saw.
  *  - A bundle we cannot fully cover is a loss. If any order in it has no score
- *    of ours, we could not have submitted that solution at all. */
+ *    of ours, we could not have submitted that solution at all.
+ *
+ *  The bar is the best total any solver could have shown over that order set,
+ *  which is at least the winner's. Comparing only with the winner would have
+ *  been laxer than the per-order column it replaces, and turned 45 losses into
+ *  wins for no better reason than that the rival who beat us on one leg had
+ *  lost the auction on another. */
 import type { Db } from '../db/db.js';
 
 export interface VerdictSummary {
@@ -40,30 +46,54 @@ export interface VerdictSummary {
  *  `bool_and(... IS NOT NULL)` rather than a plain SUM: summing nulls away would
  *  silently score a bundle we only partly covered as if we had covered it. */
 const APPLY_SQL = `
-WITH bundle_totals AS (
-  SELECT o.cow_auction_id                                 AS auction,
-         b.solver                                         AS solver,
-         count(*)                                         AS n_orders,
-         sum(COALESCE(NULLIF(b.score, ''), '0')::numeric) AS their_total,
-         CASE WHEN bool_and(o.our_score IS NOT NULL)
-              THEN sum(COALESCE(NULLIF(o.our_score, ''), '0')::numeric) END AS our_total
+WITH win_bundle AS (
+  SELECT o.cow_auction_id AS auction, b.solver AS winner, b.order_hash
   FROM solution_bids b
   JOIN orders o ON o.order_hash = b.order_hash
   WHERE b.is_winner = 1
     AND o.cow_auction_id IS NOT NULL
     AND o.resolved_at_ms IS NOT NULL
+),
+bundle AS (
+  SELECT auction, winner, count(*) AS n_orders FROM win_bundle GROUP BY 1, 2
+),
+-- Every solver's total over that same order set. The bar is the best of them,
+-- not the winner's: a solution can lose overall while still offering more on
+-- these particular orders, and claiming a win over the winner alone would be
+-- quietly lowering the bar that the per-order column already held us to.
+rival AS (
+  SELECT w.auction, w.winner, b.solver,
+         count(*)                                        AS covered,
+         sum(COALESCE(NULLIF(b.score, ''), '0')::numeric) AS total
+  FROM win_bundle w
+  JOIN solution_bids b ON b.order_hash = w.order_hash
+  GROUP BY 1, 2, 3
+),
+rival_best AS (
+  SELECT r.auction, r.winner, max(r.total) AS best_total
+  FROM rival r
+  JOIN bundle bd ON bd.auction = r.auction AND bd.winner = r.winner
+  -- A solver that did not price every order of the set could not have submitted
+  -- this solution, so its partial total is not a bar we have to clear.
+  WHERE r.covered = bd.n_orders
+  GROUP BY 1, 2
+),
+ours AS (
+  SELECT w.auction, w.winner,
+         CASE WHEN bool_and(o.our_score IS NOT NULL)
+              THEN sum(COALESCE(NULLIF(o.our_score, ''), '0')::numeric) END AS total
+  FROM win_bundle w
+  JOIN orders o ON o.order_hash = w.order_hash
   GROUP BY 1, 2
 ),
 verdict AS (
-  SELECT b.order_hash,
-         bt.n_orders,
-         CASE WHEN bt.our_total IS NOT NULL AND bt.our_total > bt.their_total
+  SELECT w.order_hash, bd.n_orders,
+         CASE WHEN ou.total IS NOT NULL AND ou.total > COALESCE(rb.best_total, 0)
               THEN 1 ELSE 0 END AS win
-  FROM solution_bids b
-  JOIN orders oo ON oo.order_hash = b.order_hash
-  JOIN bundle_totals bt
-    ON bt.auction = oo.cow_auction_id AND bt.solver = b.solver
-  WHERE b.is_winner = 1
+  FROM win_bundle w
+  JOIN bundle bd     ON bd.auction = w.auction AND bd.winner = w.winner
+  JOIN ours ou       ON ou.auction = w.auction AND ou.winner = w.winner
+  LEFT JOIN rival_best rb ON rb.auction = w.auction AND rb.winner = w.winner
 )
 UPDATE orders o
 SET batch_won = v.win, batch_size = v.n_orders

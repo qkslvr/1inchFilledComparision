@@ -17,22 +17,36 @@ function fakeDb(orders: Order[], bids: Bid[]) {
       if (sql.includes('SELECT order_hash, won FROM orders')) {
         return orders.map((o) => ({ order_hash: o.order_hash, won: o.won }));
       }
-      if (sql.trimStart().startsWith('WITH bundle_totals')) {
+      if (sql.trimStart().startsWith('WITH win_bundle')) {
         // The rule, applied exactly as the SQL states it.
         for (const b of bids.filter((x) => x.is_winner === 1)) {
           const self = orders.find((o) => o.order_hash === b.order_hash)!;
-          const bundle = bids.filter(
-            (x) =>
-              x.is_winner === 1 &&
-              x.solver === b.solver &&
-              orders.find((o) => o.order_hash === x.order_hash)?.auction === self.auction
-          );
-          const rows = bundle.map((x) => orders.find((o) => o.order_hash === x.order_hash)!);
-          const theirs = bundle.reduce((a, x) => a + x.score, 0n);
-          const complete = rows.every((r) => r.our_score !== null);
-          const ours = complete ? rows.reduce((a, r) => a + r.our_score!, 0n) : null;
-          self.batch_won = ours !== null && ours > theirs ? 1 : 0;
-          self.batch_size = bundle.length;
+          const set = bids
+            .filter(
+              (x) =>
+                x.is_winner === 1 &&
+                x.solver === b.solver &&
+                orders.find((o) => o.order_hash === x.order_hash)?.auction === self.auction
+            )
+            .map((x) => x.order_hash);
+
+          // The bar: the best total among solvers that priced the WHOLE set.
+          let bar = 0n;
+          for (const solver of new Set(bids.map((x) => x.solver))) {
+            const theirs = set.map((h) =>
+              bids.find((x) => x.order_hash === h && x.solver === solver)
+            );
+            if (theirs.some((x) => x === undefined)) continue;
+            const total = theirs.reduce((a, x) => a + x!.score, 0n);
+            if (total > bar) bar = total;
+          }
+
+          const rows = set.map((h) => orders.find((o) => o.order_hash === h)!);
+          const ours = rows.every((r) => r.our_score !== null)
+            ? rows.reduce((a, r) => a + r.our_score!, 0n)
+            : null;
+          self.batch_won = ours !== null && ours > bar ? 1 : 0;
+          self.batch_size = set.length;
         }
         return [];
       }
@@ -111,4 +125,37 @@ test('a tie loses, because ranking above the winner requires beating it', async 
   const bids: Bid[] = [{ order_hash: 'A', solver: 'rival', is_winner: 1, score: 100n }];
   await recomputeBatchVerdicts(fakeDb(orders, bids));
   assert.equal(orders[0]!.batch_won, 0);
+});
+
+test('the bar is the best solution over the set, not merely the winning one', async () => {
+  // A solver can lose the auction and still have offered the most on these
+  // orders. Comparing only with the winner promoted 45 real losses to wins.
+  const orders: Order[] = [
+    { order_hash: 'A', auction: 1, our_score: 150n, won: 0 },
+    { order_hash: 'B', auction: 1, our_score: 150n, won: 0 },
+  ];
+  const bids: Bid[] = [
+    { order_hash: 'A', solver: 'winner', is_winner: 1, score: 100n },
+    { order_hash: 'B', solver: 'winner', is_winner: 1, score: 100n },
+    // Lost the auction overall, but out-offered us across this pair.
+    { order_hash: 'A', solver: 'other', is_winner: 0, score: 400n },
+    { order_hash: 'B', solver: 'other', is_winner: 0, score: 10n },
+  ];
+  await recomputeBatchVerdicts(fakeDb(orders, bids));
+  assert.equal(orders[0]!.batch_won, 0, '300 does not clear the 410 someone else showed');
+});
+
+test('a rival that priced only part of the set sets no bar', async () => {
+  // It could not have submitted this solution, so its total is not a bar.
+  const orders: Order[] = [
+    { order_hash: 'A', auction: 1, our_score: 150n, won: 1 },
+    { order_hash: 'B', auction: 1, our_score: 150n, won: 1 },
+  ];
+  const bids: Bid[] = [
+    { order_hash: 'A', solver: 'winner', is_winner: 1, score: 100n },
+    { order_hash: 'B', solver: 'winner', is_winner: 1, score: 100n },
+    { order_hash: 'A', solver: 'partial', is_winner: 0, score: 9_999n },
+  ];
+  await recomputeBatchVerdicts(fakeDb(orders, bids));
+  assert.equal(orders[0]!.batch_won, 1, '300 beats the winning 200; the partial bid is not a bundle');
 });
