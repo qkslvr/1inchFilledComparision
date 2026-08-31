@@ -297,7 +297,7 @@ async function collectChain(chain: ResolvedChain, db: Db): Promise<Record<string
   // The solver dataset answers different questions, so it carries its own
   // block rather than bending the shadow shapes: a win rate is not a win count,
   // and a quote-hold rate has no analogue at all in the other tabs.
-  const solver = chain.orderSource === 'cow-solver' ? await collectSolver(db) : null;
+  const solver = chain.orderSource === 'cow-solver' ? await collectSolver(db, chain.venues) : null;
 
   return {
     key: chain.key,
@@ -416,7 +416,7 @@ const isEth = (s: string | null) => {
   return u === 'ETH' || u === 'WETH' || /^(ST|W|R|CB|WE|OS|FR)?ETH$/.test(u);
 };
 
-async function collectSolver(db: Db) {
+async function collectSolver(db: Db, activeVenues: readonly string[]) {
   const [venueRows, holdRows, rows, coverage, classRows, assetRows, holdTotals, target, batchRows] = await Promise.all([
     // A row whose score was zero never carried a bid, so it is neither a win
     // nor a loss and has no margin. Counting it as a bid understates every
@@ -579,7 +579,10 @@ async function collectSolver(db: Db) {
     }
   }
 
-  const venues = ['kalqix', 'kyber', 'bebop'].map((venue) => {
+  // Only the venues this dataset actually quotes. The no-Kyber view otherwise
+  // rendered an empty Kyber card, which reads as a venue that never wins
+  // rather than one that was not asked.
+  const venues = activeVenues.map((venue) => {
     const v = venueRows.find((r) => r.venue === venue);
     const h = holdsByVenue.get(venue);
     const bids = Number(v?.bids ?? 0);
