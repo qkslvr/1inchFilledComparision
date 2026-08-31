@@ -235,12 +235,12 @@ function overviewCard(c) {
     + ov('OTHER', pct(o.otherPct), 'of orders')
     + ov('TOTAL VOLUME', usdShort(o.volumeUsd), 'of orders tracked')
     + ov('MEDIAN TRADE', usdShort(o.medianSizeUsd), null)
-    + ov('BIDS WON', o.resolved > 0 ? o.bidsWon.toLocaleString('en-US') : '\u2014', o.resolved > 0 ? pct(100 * o.bidsWon / o.resolved) + ' of resolved' : 'nothing resolved yet')
+    + ov('BIDS WON', o.decided > 0 ? o.bidsWon.toLocaleString('en-US') : '\u2014', o.decided > 0 ? pct(100 * o.bidsWon / o.decided) + ' of ' + o.decided.toLocaleString('en-US') + ' decided' : 'nothing decided yet')
     + ov('QUOTE HELD', pct(o.heldPct), 'all re-quotes')
     + ov('QUOTE HELD / WON', pct(o.heldWonPct), 'bids we won')
     + ov('MEDIAN EDGE', bps(o.medianMarginBps), 'vs best rival')
     + ov('SURPLUS DELIVERED', usdShort(o.surplusUsd), 'above user limits')
-    + ov('OUR FEE', usdShort(o.feeUsd), 'our markup')
+    + ov('OUR FEE', usdShort(o.feeUsd), 'our markup, on top of surplus')
     + '</div>';
 }
 

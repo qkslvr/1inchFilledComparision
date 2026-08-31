@@ -423,17 +423,22 @@ async function collectSolver(db: Db) {
     // win rate; letting its -10000 bps into the median destroys it.
     db.all(`SELECT our_best_venue AS venue,
                    count(*) FILTER (WHERE our_score <> '0') AS bids,
-                   -- The atomic verdict where we have one: a solution settles
+                   -- Only orders we can decide atomically. A solution settles
                    -- whole, so winning one order of a batch and losing another
-                   -- is not a result any solver could have had.
-                   sum(COALESCE(batch_won, won)) FILTER (WHERE our_score <> '0') AS wins,
+                   -- is not a result any solver could have had — and falling
+                   -- back to the per-order column where no ladder was recorded
+                   -- would blend the rule we just rejected into the headline.
+                   -- Rows before solution_bids existed are simply undecidable,
+                   -- and the rate is stated over what we can decide.
+                   count(*) FILTER (WHERE batch_won IS NOT NULL AND our_score <> '0') AS decided,
+                   count(*) FILTER (WHERE batch_won = 1) AS wins,
                    count(*) FILTER (WHERE our_score = '0') AS no_bid,
                    -- Wins against a rival that actually offered surplus. Beating
                    -- a rival who delivered exactly the user's limit and nothing
                    -- more is a win in the mechanism, but it is not evidence we
                    -- can beat a real solver, and it was inflating the headline.
-                   count(*) FILTER (WHERE our_score <> '0' AND best_rival_score <> '0') AS contested,
-                   count(*) FILTER (WHERE COALESCE(batch_won, won) = 1 AND best_rival_score <> '0') AS contested_wins,
+                   count(*) FILTER (WHERE batch_won IS NOT NULL AND our_score <> '0' AND best_rival_score <> '0') AS contested,
+                   count(*) FILTER (WHERE batch_won = 1 AND best_rival_score <> '0') AS contested_wins,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY score_margin_bps) AS median_margin_bps
             FROM orders WHERE resolved_at_ms IS NOT NULL AND our_best_venue IS NOT NULL
             GROUP BY 1`),
@@ -441,7 +446,7 @@ async function collectSolver(db: Db) {
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY slippage_bps) AS median_slippage_bps
             FROM quote_holds GROUP BY 1, 2, 3`),
     db.all(`SELECT o.order_hash, o.pair, o.resolved_at_ms,
-                   COALESCE(o.batch_won, o.won) AS won, o.batch_size, o.score_margin_bps,
+                   o.batch_won AS won, o.batch_size, o.score_margin_bps,
                    o.our_best_venue, o.our_score, o.cow_winner_score, o.cow_reference_score,
                    o.cow_solver_count, o.size_usd, o.bid_at_ms, o.rival_count, o.best_rival_solver,
                    o.surplus_usd, o.edge_usd, o.fee_usd, o.order_kind, o.partially_fillable,
@@ -453,7 +458,8 @@ async function collectSolver(db: Db) {
     db.get(`SELECT count(*) AS tracked,
                    count(*) FILTER (WHERE resolved_at_ms IS NOT NULL) AS resolved,
                    count(*) FILTER (WHERE our_score IS NOT NULL) AS bid,
-                   count(*) FILTER (WHERE COALESCE(batch_won, won) = 1) AS won,
+                   count(*) FILTER (WHERE batch_won = 1) AS won,
+                   count(*) FILTER (WHERE batch_won IS NOT NULL) AS decided,
                    sum(surplus_usd) AS surplus_usd, sum(fee_usd) AS fee_usd,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY score_margin_bps) AS median_margin_bps,
                    sum(size_usd) AS volume_usd,
@@ -492,7 +498,7 @@ async function collectSolver(db: Db) {
                    min(o.our_rank) AS best_rank,
                    max(o.our_rank) AS worst_rank,
                    max(o.rival_count) AS max_rivals,
-                   count(*) FILTER (WHERE COALESCE(o.batch_won, o.won) = 1) AS orders_we_win,
+                   count(*) FILTER (WHERE o.batch_won = 1) AS orders_we_win,
                    string_agg(DISTINCT o.pair, ', ') AS pairs,
                    string_agg(DISTINCT o.our_best_venue, ', ') AS venues,
                    bool_or(o.target_bid) AS target_bid,
@@ -552,6 +558,10 @@ async function collectSolver(db: Db) {
     const h = holdsByVenue.get(venue);
     const bids = Number(v?.bids ?? 0);
     const wins = Number(v?.wins ?? 0);
+    // The win rate's denominator is what we could decide, not what we bid on.
+    // Orders with no recorded ladder cannot be re-decided atomically, and
+    // counting them as losses would understate every venue.
+    const decided = Number(v?.decided ?? 0);
     return {
       venue,
       name: venue === 'kalqix' ? 'KalqiX' : venue === 'kyber' ? 'Kyber' : 'Bebop',
@@ -566,7 +576,8 @@ async function collectSolver(db: Db) {
           : null,
       // Null rather than 0% when nothing has been bid: an untested venue and a
       // venue that never wins must not look the same.
-      winRatePct: bids > 0 ? (100 * wins) / bids : null,
+      decided,
+      winRatePct: decided > 0 ? (100 * wins) / decided : null,
       holdChecks: h?.checks ?? 0,
       heldPct: h && h.checks > 0 ? (100 * h.held) / h.checks : null,
       medianMarginBps: v?.median_margin_bps === null || v?.median_margin_bps === undefined ? null : Number(v.median_margin_bps),
@@ -632,6 +643,9 @@ async function collectSolver(db: Db) {
       auctionsSeen: Number(coverage?.tracked ?? 0),
       resolved: Number(coverage?.resolved ?? 0),
       bidsWon: Number(coverage?.won ?? 0),
+      // The denominator for that: orders whose ladder we recorded and can
+      // therefore re-decide over the whole solution.
+      decided: Number(coverage?.decided ?? 0),
       assetsSeen: Number(assetRows?.assets ?? 0),
       observedHours:
         coverage?.first_ms && coverage?.last_ms
@@ -668,6 +682,7 @@ async function collectSolver(db: Db) {
       tracked: Number(coverage?.tracked ?? 0),
       resolved: Number(coverage?.resolved ?? 0),
       bid: Number(coverage?.bid ?? 0),
+      decided: Number(coverage?.decided ?? 0),
     },
     rows: rows.map((r) => ({
       time: new Date(Number(r.resolved_at_ms)).toISOString().slice(11, 19),

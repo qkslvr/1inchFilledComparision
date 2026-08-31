@@ -58,12 +58,12 @@ const emptyChain = {
     ],
     target: null,
     overview: {
-      auctionsSeen: 0, resolved: 0, bidsWon: 0, assetsSeen: 0, observedHours: 0,
+      auctionsSeen: 0, resolved: 0, bidsWon: 0, decided: 0, assetsSeen: 0, observedHours: 0,
       btcPct: null, ethPct: null, stablePct: null, otherPct: null, classified: 0,
       volumeUsd: null, medianSizeUsd: null, heldPct: null, heldWonPct: null,
       medianMarginBps: null, surplusUsd: null, feeUsd: null,
     },
-    coverage: { tracked: 0, resolved: 0, bid: 0 },
+    coverage: { tracked: 0, resolved: 0, bid: 0, decided: 0 },
     rows: [],
     batches: [],
   },
@@ -105,8 +105,8 @@ test('every table row has exactly as many cells as the header has columns', () =
   }) as string;
   const cells = (row.match(/<td/g) ?? []).length;
   const section = api.solverSection!({
-    chainId: 1, solver: { venues: [], target: null, rows: [], coverage: { tracked: 0, resolved: 0, bid: 0 },
-      overview: { auctionsSeen: 0, resolved: 0, bidsWon: 0, assetsSeen: 0, observedHours: 0, btcPct: null,
+    chainId: 1, solver: { venues: [], target: null, rows: [], coverage: { tracked: 0, resolved: 0, bid: 0, decided: 0 },
+      overview: { auctionsSeen: 0, resolved: 0, bidsWon: 0, decided: 0, assetsSeen: 0, observedHours: 0, btcPct: null,
         ethPct: null, stablePct: null, otherPct: null, classified: 0, volumeUsd: null, medianSizeUsd: null,
         heldPct: null, heldWonPct: null, medianMarginBps: null, surplusUsd: null, feeUsd: null } },
   }) as string;
@@ -135,7 +135,7 @@ test('a populated dataset renders, including the target-solver strip', () => {
     solver: {
       ...emptyChain.solver,
       target: { theyBid: 9, theyWon: 2, theyLost: 7, weBeat: 4, weBeatOnTheirLosses: 3, beatPct: 44.4, medianVsBps: 12, edgeUsd: 41.2 },
-      overview: { ...emptyChain.solver.overview, auctionsSeen: 5915, resolved: 287, bidsWon: 42, volumeUsd: 216687772, medianSizeUsd: 10005, heldPct: 78.6, heldWonPct: 72.4, btcPct: 4.6 },
+      overview: { ...emptyChain.solver.overview, auctionsSeen: 5915, resolved: 287, bidsWon: 42, decided: 260, volumeUsd: 216687772, medianSizeUsd: 10005, heldPct: 78.6, heldWonPct: 72.4, btcPct: 4.6 },
       rows: [{
         time: '10:00:00', tsMs: 1, pair: 'ETH_USDC', sizeUsd: 1000, venue: 'kyber', won: true,
         noBid: false, marginBps: 12, solverCount: 8, rivalCount: 3, quoteRounds: 4, held: true,
@@ -145,6 +145,9 @@ test('a populated dataset renders, including the target-solver strip', () => {
   };
   const html = api.chainSection!(withData, true) as string;
   assert.ok(html.includes('TOTAL VOLUME'), 'volume is missing from the overview');
+  // The win rate is stated over what we could decide atomically, not over
+  // everything resolved — a blend of the two rules is what we removed.
+  assert.ok(html.includes('of 260 decided'), 'the win denominator is not the decided count');
   assert.ok(html.includes('VS TARGET SOLVER'), 'the target strip is missing');
   assert.ok(html.includes('ETH_USDC'), 'the trade row did not render');
 });
