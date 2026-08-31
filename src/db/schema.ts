@@ -105,6 +105,15 @@ export const MIGRATIONS: string[] = [
   // — which limited a partial-fill fix to 29 of 107 affected rows.
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS buy_token_price TEXT`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS sell_token_price TEXT`,
+  // The atomic verdict: did we beat the winner over its WHOLE solution, not
+  // just over this one order. A CoW solution settles all-or-nothing, so winning
+  // one order of a two-order batch and losing the other is a result no solver
+  // could have had — yet that is what 61 of our multi-order auctions recorded.
+  // `won` stays as the per-order comparison; this is the one to quote.
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS batch_won SMALLINT`,
+  // How many orders the winner's solution covered, so a verdict drawn from a
+  // bundle we only partly observed can be told apart from a complete one.
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS batch_size INTEGER`,
   // Every proposal on every order, so a batch can show the whole ladder rather
   // than the maximum. We were computing the best rival and discarding the rest.
   `CREATE TABLE IF NOT EXISTS solution_bids (
@@ -225,7 +234,9 @@ CREATE TABLE IF NOT EXISTS orders (
   vs_target_bps      DOUBLE PRECISION,
   our_rank           INTEGER,
   buy_token_price    TEXT,
-  sell_token_price   TEXT
+  sell_token_price   TEXT,
+  batch_won          SMALLINT,
+  batch_size         INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS solution_bids (

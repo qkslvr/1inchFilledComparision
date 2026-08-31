@@ -35,6 +35,7 @@ import { fetchSignedOrder, type CowSignedOrder } from './orders.js';
 import { scoreOf, scoreOfBuy, scoreMarginBps, notionalNative, proRataLimit, atFillSize, wouldHaveWon } from './score.js';
 import { tokenDecimals, tokenSymbol, weiToTokenViaUsd } from './tokens.js';
 import { takePollSlot } from './pollgate.js';
+import { recomputeBatchVerdicts } from './batchverdict.js';
 import { getJson, getJsonOrNull, HttpStatusError } from '../http/json.js';
 import { bpsOfCeil, ppmOfCeil, quoteForBaseCeil, rescale, toFloat } from '../pricing/units.js';
 import { buildDecidedOutcome, OUTCOME_ORDER_SQL, OUTCOME_TICK_SQL } from '../report/outcome.js';
@@ -605,10 +606,6 @@ async function resolve(
     }
   }
 
-  // The venue's own dollar valuation of its output, where it gives one — used to
-  // express our markup in money rather than as a fraction of an opaque amount.
-  const quotes0Usd = best?.q.outUsd6 ? toFloat(best.q.outUsd6, 6) : null;
-
   // The bar is what rivals offered on THIS order, not the winner's score for
   // their whole bundle. A solver bundling five orders out-scores us on volume
   // alone while possibly offering this user less, and comparing against that
@@ -694,9 +691,29 @@ async function resolve(
   const ethUsd6 = nativeUsd6();
   const toUsd = (wei: bigint | null): number | null =>
     wei === null || ethUsd6 === undefined ? null : toFloat(wei, 18) * toFloat(ethUsd6, 6);
+
+  // Our markup, charged on what actually settled.
+  //
+  // This used to value our own whole-order quote with `best.q.outUsd6`, which is
+  // a second and ungated valuation path. `sizeUsdFromQuote` refuses a valuation
+  // above maxBelievableSizeUsd; the fee did not, so an aArbWETH/aArbUSDCn row
+  // whose size was correctly discarded as nonsense still booked $29,019 of fee —
+  // 30% of the reported total, from one trade. Both figures now come from the
+  // same gated number, so a size we refuse to believe cannot earn a fee either.
+  //
+  // Scaling by the fill fraction matters just as much: the score is computed at
+  // the size that settled, so a fee charged on the whole order was comparing a
+  // slice of surplus against a fee on the entire limit.
+  const sizeUsdWhole =
+    (t.pair && t.direction ? sizeUsdOf(t.order, t.pair, t.direction) : null) ??
+    sizeUsdFromQuote(bidQuotes);
+  const fillFraction =
+    referenceSell !== undefined && t.order.sellAmount > 0n
+      ? Number(referenceSell) / Number(t.order.sellAmount)
+      : 1;
   const feeUsd =
-    best && quotes0Usd !== null && best.q.out > 0n
-      ? (toFloat(best.q.fee, t.buyDecimals) / toFloat(best.q.out, t.buyDecimals)) * quotes0Usd
+    best && sizeUsdWhole !== null
+      ? sizeUsdWhole * fillFraction * (Number(best.q.feeBps) / 10_000)
       : null;
   db.recordResolution(
     t.order.uid, now, won, margin, bestRivalScore, bestRivalSolver, proposals.length,
@@ -708,7 +725,12 @@ async function resolve(
     target,
     { buy: prices.get(t.order.buyToken), sell: prices.get(t.order.sellToken) }
   );
-  db.setTerminal(t.order.uid, 'filled', null, t.order.sellAmount, settledBuyAmount);
+  // What settled, not what was offered. Writing the limit here made every row
+  // read as a 100% fill, which hid the partial fills entirely — the fill
+  // fraction the fee now depends on would have been silently 1 for all of them.
+  db.setTerminal(
+    t.order.uid, 'filled', null, referenceSell ?? t.order.sellAmount, settledBuyAmount
+  );
   await db.all(`UPDATE orders SET terminal_at_ms = ? WHERE order_hash = ?`, [now, t.order.uid]);
   await db.all(
     `UPDATE orders SET cow_auction_id = ?, cow_solver_count = ?, cow_winner_solver = ?,
@@ -1142,6 +1164,19 @@ const quoteTimer = setInterval(() => {
   }
 }, config.cow.solverQuoteIntervalMs);
 
+// An auction's orders resolve one at a time, so a bundle verdict is only final
+// once the last of them lands. Recomputing on a timer lets it settle rather than
+// freezing whatever was known when the first order of the batch resolved.
+const verdictTimer = setInterval(() => {
+  void recomputeBatchVerdicts(db)
+    .then((s) => {
+      if (s.demoted || s.promoted) {
+        log(`batch verdicts: ${s.decided} decided, ${s.demoted} demoted, ${s.promoted} promoted`);
+      }
+    })
+    .catch((err) => logError('batch verdicts', err));
+}, 120_000);
+
 const status = setInterval(() => {
   log(
     `status: tracked=${tracked.size} discovered=${discovered} bids=${bidsPlaced} ` +
@@ -1165,6 +1200,7 @@ process.on('SIGINT', () => {
   clearInterval(nativeUsdTimer);
   clearInterval(auctionTimer);
   clearInterval(quoteTimer);
+  clearInterval(verdictTimer);
   clearInterval(status);
   bebop.stop();
   for (const m of marketSamplers.values()) m.sampler.stop();

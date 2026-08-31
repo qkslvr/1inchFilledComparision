@@ -423,21 +423,25 @@ async function collectSolver(db: Db) {
     // win rate; letting its -10000 bps into the median destroys it.
     db.all(`SELECT our_best_venue AS venue,
                    count(*) FILTER (WHERE our_score <> '0') AS bids,
-                   sum(won) FILTER (WHERE our_score <> '0') AS wins,
+                   -- The atomic verdict where we have one: a solution settles
+                   -- whole, so winning one order of a batch and losing another
+                   -- is not a result any solver could have had.
+                   sum(COALESCE(batch_won, won)) FILTER (WHERE our_score <> '0') AS wins,
                    count(*) FILTER (WHERE our_score = '0') AS no_bid,
                    -- Wins against a rival that actually offered surplus. Beating
                    -- a rival who delivered exactly the user's limit and nothing
                    -- more is a win in the mechanism, but it is not evidence we
                    -- can beat a real solver, and it was inflating the headline.
                    count(*) FILTER (WHERE our_score <> '0' AND best_rival_score <> '0') AS contested,
-                   count(*) FILTER (WHERE won = 1 AND best_rival_score <> '0') AS contested_wins,
+                   count(*) FILTER (WHERE COALESCE(batch_won, won) = 1 AND best_rival_score <> '0') AS contested_wins,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY score_margin_bps) AS median_margin_bps
             FROM orders WHERE resolved_at_ms IS NOT NULL AND our_best_venue IS NOT NULL
             GROUP BY 1`),
     db.all(`SELECT venue, delay_ms, won, count(*) AS checks, sum(held) AS held,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY slippage_bps) AS median_slippage_bps
             FROM quote_holds GROUP BY 1, 2, 3`),
-    db.all(`SELECT o.order_hash, o.pair, o.resolved_at_ms, o.won, o.score_margin_bps,
+    db.all(`SELECT o.order_hash, o.pair, o.resolved_at_ms,
+                   COALESCE(o.batch_won, o.won) AS won, o.batch_size, o.score_margin_bps,
                    o.our_best_venue, o.our_score, o.cow_winner_score, o.cow_reference_score,
                    o.cow_solver_count, o.size_usd, o.bid_at_ms, o.rival_count, o.best_rival_solver,
                    o.surplus_usd, o.edge_usd, o.fee_usd, o.order_kind, o.partially_fillable,
@@ -449,7 +453,7 @@ async function collectSolver(db: Db) {
     db.get(`SELECT count(*) AS tracked,
                    count(*) FILTER (WHERE resolved_at_ms IS NOT NULL) AS resolved,
                    count(*) FILTER (WHERE our_score IS NOT NULL) AS bid,
-                   count(*) FILTER (WHERE won = 1) AS won,
+                   count(*) FILTER (WHERE COALESCE(batch_won, won) = 1) AS won,
                    sum(surplus_usd) AS surplus_usd, sum(fee_usd) AS fee_usd,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY score_margin_bps) AS median_margin_bps,
                    sum(size_usd) AS volume_usd,
@@ -488,7 +492,7 @@ async function collectSolver(db: Db) {
                    min(o.our_rank) AS best_rank,
                    max(o.our_rank) AS worst_rank,
                    max(o.rival_count) AS max_rivals,
-                   count(*) FILTER (WHERE o.won = 1) AS orders_we_win,
+                   count(*) FILTER (WHERE COALESCE(o.batch_won, o.won) = 1) AS orders_we_win,
                    string_agg(DISTINCT o.pair, ', ') AS pairs,
                    string_agg(DISTINCT o.our_best_venue, ', ') AS venues,
                    bool_or(o.target_bid) AS target_bid,
