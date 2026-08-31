@@ -442,9 +442,16 @@ async function collectSolver(db: Db) {
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY score_margin_bps) AS median_margin_bps
             FROM orders WHERE resolved_at_ms IS NOT NULL AND our_best_venue IS NOT NULL
             GROUP BY 1`),
-    db.all(`SELECT venue, delay_ms, won, count(*) AS checks, sum(held) AS held,
-                   percentile_cont(0.5) WITHIN GROUP (ORDER BY slippage_bps) AS median_slippage_bps
-            FROM quote_holds GROUP BY 1, 2, 3`),
+    // quote_holds.won was frozen at insert time from the per-order verdict, so
+    // the held/lost split still used the rule the atomic recount replaced. Read
+    // the verdict from the order instead; holds on orders we cannot decide join
+    // to NULL and belong in neither arm.
+    db.all(`SELECT h.venue, h.delay_ms, o.batch_won AS won,
+                   count(*) AS checks, sum(h.held) AS held,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY h.slippage_bps) AS median_slippage_bps
+            FROM quote_holds h JOIN orders o ON o.order_hash = h.order_hash
+            WHERE o.batch_won IS NOT NULL
+            GROUP BY 1, 2, 3`),
     db.all(`SELECT o.order_hash, o.pair, o.resolved_at_ms,
                    o.batch_won AS won, o.batch_size, o.score_margin_bps,
                    o.our_best_venue, o.our_score, o.cow_winner_score, o.cow_reference_score,
@@ -469,7 +476,12 @@ async function collectSolver(db: Db) {
                    -- not be decided either way.
                    sum(surplus_usd) FILTER (WHERE batch_won = 1) AS surplus_usd,
                    sum(fee_usd) FILTER (WHERE batch_won = 1) AS fee_usd,
-                   percentile_cont(0.5) WITHIN GROUP (ORDER BY score_margin_bps) AS median_margin_bps,
+                   -- And the same filter again. A median over every resolved
+                   -- order is dominated by the ones we lost, which sit at -119
+                   -- bps, so the card read -15 bps under the heading MEDIAN EDGE
+                   -- while the trades we actually won ran +19.
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY score_margin_bps)
+                     FILTER (WHERE batch_won = 1) AS median_margin_bps,
                    sum(size_usd) AS volume_usd,
                    -- The denominator for that fee. Without it $1.6k floats free
                    -- and no one can check it is 5 bps of anything.
@@ -483,10 +495,13 @@ async function collectSolver(db: Db) {
     db.get(`SELECT count(DISTINCT sym) AS assets FROM (
               SELECT sell_symbol AS sym FROM orders WHERE sell_symbol IS NOT NULL
               UNION SELECT buy_symbol FROM orders WHERE buy_symbol IS NOT NULL) u`),
-    db.get(`SELECT count(*) AS checks, sum(held) AS held,
-                   count(*) FILTER (WHERE won = 1) AS won_checks,
-                   sum(held) FILTER (WHERE won = 1) AS won_held
-            FROM quote_holds`),
+    // The overall rate stays over every re-quote — it measures whether a price
+    // survives, which is worth knowing win or lose. Only the won arm is filtered,
+    // and by the order's verdict rather than the stale one on the hold.
+    db.get(`SELECT count(*) AS checks, sum(h.held) AS held,
+                   count(*) FILTER (WHERE o.batch_won = 1) AS won_checks,
+                   sum(h.held) FILTER (WHERE o.batch_won = 1) AS won_held
+            FROM quote_holds h LEFT JOIN orders o ON o.order_hash = h.order_hash`),
     // Cicada only: how we compare with the one solver being pitched.
     db.get(`SELECT count(*) FILTER (WHERE target_bid) AS they_bid,
                    count(*) FILTER (WHERE target_won) AS they_won,

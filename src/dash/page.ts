@@ -239,7 +239,7 @@ function overviewCard(c) {
     + ov('BIDS WON', o.decided > 0 ? o.bidsWon.toLocaleString('en-US') : '\u2014', o.decided > 0 ? pct(100 * o.bidsWon / o.decided) + ' of ' + o.decided.toLocaleString('en-US') + ' decided' : 'nothing decided yet')
     + ov('QUOTE HELD', pct(o.heldPct), 'all re-quotes')
     + ov('QUOTE HELD / WON', pct(o.heldWonPct), 'bids we won')
-    + ov('MEDIAN EDGE', bps(o.medianMarginBps), 'vs best rival')
+    + ov('MEDIAN EDGE', bps(o.medianMarginBps), 'vs best rival, on trades we won')
     + ov('SURPLUS DELIVERED', usdShort(o.surplusUsd), 'above user limits, on trades we won')
     + ov('OUR FEE', usdShort(o.feeUsd), 'our markup, on top of surplus')
     + '</div>';
