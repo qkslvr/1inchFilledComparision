@@ -488,27 +488,22 @@ async function collectSolver(db: Db) {
                    min(o.our_rank) AS best_rank,
                    max(o.our_rank) AS worst_rank,
                    max(o.rival_count) AS max_rivals,
-                   min(o.rival_count) AS min_rivals,
-                   max(o.rival_count) AS rivals,
                    count(*) FILTER (WHERE o.won = 1) AS orders_we_win,
                    string_agg(DISTINCT o.pair, ', ') AS pairs,
                    string_agg(DISTINCT o.our_best_venue, ', ') AS venues,
-                   bool_or(o.target_bid) AS target_bid
+                   bool_or(o.target_bid) AS target_bid,
                    -- Whether the price survived, carried up to the batch so the
                    -- question does not require dropping to the per-order table.
-                   (SELECT count(*) FROM quote_holds h
-                     WHERE h.order_hash IN (
-                       SELECT x.order_hash FROM orders x WHERE x.cow_auction_id = o.cow_auction_id))
-                     AS hold_checks,
-                   (SELECT sum(h.held) FROM quote_holds h
-                     WHERE h.order_hash IN (
-                       SELECT x.order_hash FROM orders x WHERE x.cow_auction_id = o.cow_auction_id))
-                     AS holds_kept,
-                   (SELECT max(h.slippage_bps) FROM quote_holds h
-                     WHERE h.order_hash IN (
-                       SELECT x.order_hash FROM orders x WHERE x.cow_auction_id = o.cow_auction_id))
-                     AS worst_slippage_bps
+                   -- Aggregated from a join rather than correlated subqueries,
+                   -- which would re-scan quote_holds once per column per batch.
+                   sum(h.checks) AS hold_checks,
+                   sum(h.kept) AS holds_kept,
+                   max(h.worst) AS worst_slippage_bps
             FROM orders o
+            LEFT JOIN LATERAL (
+              SELECT count(*) AS checks, sum(q.held) AS kept, max(q.slippage_bps) AS worst
+              FROM quote_holds q WHERE q.order_hash = o.order_hash
+            ) h ON true
             WHERE o.resolved_at_ms IS NOT NULL AND o.cow_auction_id IS NOT NULL
             GROUP BY 1 ORDER BY 2 DESC LIMIT 500`),
   ]);
