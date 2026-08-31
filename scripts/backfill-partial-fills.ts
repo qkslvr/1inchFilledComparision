@@ -28,6 +28,11 @@ import { atFillSize, proRataLimit, scoreOf } from '../src/cow/score.js';
 import { recomputeBatchVerdicts } from '../src/cow/batchverdict.js';
 
 const apply = process.argv.includes('--apply');
+/** One-time repair for rows corrected by an earlier run that did not yet store
+ *  the price. Their score is already on the fill-size basis, so the price comes
+ *  from that basis instead — writing it takes them out of the selection above
+ *  and stops a re-run from scaling them a second time. */
+const seal = process.argv.includes('--seal');
 const db = await Db.open(config.chainId, { schemaOverride: config.schemaOverride });
 const big = (s: string | null): bigint => BigInt(s ?? '0');
 
@@ -63,6 +68,21 @@ for (const r of rows) {
   const oldScore = big(r.our_score);
 
   if (r.order_kind !== 'sell') { skippedBuy++; surplusNow += r.surplus_usd ?? 0; continue; }
+
+  if (seal) {
+    const owedS = proRataLimit(limitBuy, ref, limitSell);
+    const ourAtRefS = atFillSize(ourOut, limitSell, ref);
+    if (oldScore <= 0n || ourAtRefS === null || ourAtRefS <= owedS) { skippedZero++; continue; }
+    const priceS = (oldScore * 10n ** 18n) / (ourAtRefS - owedS);
+    console.log(`  seal ${r.order_hash.slice(0, 10)} ${r.pair.padEnd(20)} price ${priceS}`);
+    if (apply) {
+      await db.all(`UPDATE orders SET buy_token_price = $1 WHERE order_hash = $2`,
+        [priceS.toString(), r.order_hash]);
+    }
+    fixed++;
+    surplusNow += r.surplus_usd ?? 0;
+    continue;
+  }
   // Zero score cannot be inverted for a price — and carries no surplus either,
   // so leaving it costs the totals nothing.
   if (oldScore <= 0n || ourOut <= limitBuy) { skippedZero++; surplusNow += r.surplus_usd ?? 0; continue; }
@@ -107,10 +127,15 @@ for (const r of rows) {
 
   if (apply) {
     await db.all(
+      // Storing the recovered price is what makes this safe to re-run. The row
+      // is selected by `buy_token_price IS NULL`, and the price is inverted from
+      // a score the OLD formula produced — so a second pass over an already
+      // corrected row would invert the new score against the old basis and
+      // shrink it by the fill fraction all over again.
       `UPDATE orders SET our_score = $1, surplus_usd = $2, edge_usd = $3,
-         best_rival_score = $4, won = $5 WHERE order_hash = $6`,
+         best_rival_score = $4, won = $5, buy_token_price = $6 WHERE order_hash = $7`,
       [newScore.toString(), newSurplus, newEdge, bestRival.toString(),
-       newScore > bestRival ? 1 : 0, r.order_hash]
+       newScore > bestRival ? 1 : 0, price.toString(), r.order_hash]
     );
     for (const [solver, s] of rivalUpdates) {
       await db.all(`UPDATE solution_bids SET score = $1 WHERE order_hash = $2 AND solver = $3`,
