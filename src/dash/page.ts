@@ -311,7 +311,7 @@ function batchRow(b) {
     + ' data-venue="' + esc((b.venues || '').split(',')[0].trim()) + '">'
     + '<td>' + esc(b.time) + '</td>'
     + '<td class="mut">' + b.auctionId + '</td>'
-    + num(b.orders, String(b.orders))
+    + num(b.orders, String(b.orders) + (b.hasPartial ? ' <span class="chip" title="contains a partially fillable order — our quote covers the whole order while rivals may have filled a slice">part</span>' : ''))
     + '<td>' + esc(b.pairs || '') + '</td>'
     + num(b.sizeUsd, esc(usd(b.sizeUsd)))
     + num(b.solvers, b.solvers === null ? '\u2014' : String(b.solvers))
@@ -416,7 +416,7 @@ function solverRow(o) {
     + ' data-text="' + esc(((o.pair || '') + ' ' + (o.venue || '')).toLowerCase()) + '">'
     + '<td>' + esc(o.time) + '</td>'
     + '<td>' + esc(o.pair || '') + '</td>'
-    + '<td>' + esc(o.kind || '') + '</td>'
+    + '<td>' + esc(o.kind || '') + (o.partial ? ' <span class="chip" title="partially fillable: rivals may have filled a slice while we quoted the whole order, so our edge here is volume as much as price">part</span>' : '') + '</td>'
     + num(o.sizeUsd, esc(usd(o.sizeUsd)))
     + num(o.surplusUsd, usdShort(o.surplusUsd))
     + num(o.feeUsd, usdShort(o.feeUsd))

@@ -33,6 +33,21 @@ export interface BuyScoreInput {
   sellTokenPrice: bigint | undefined;
 }
 
+/** Scale a limit to the portion of the order actually being filled.
+ *
+ *  A partially fillable order's limit covers the whole amount, so a solver
+ *  filling 1.8% of it must only clear 1.8% of the floor. Comparing their
+ *  absolute delivery against the whole-order limit makes every partial fill look
+ *  like a failure — and makes anyone quoting the full size look spectacular.
+ *
+ *  Observed on a live order: rivals filled 1.8% at 0.00047 wstETH per EURe and
+ *  scored zero; we quoted the full size at 0.00038 — a 19% WORSE price — and
+ *  scored $8,595. The comparison did not just misprice, it inverted. */
+export function proRataLimit(limitBuy: bigint, filledSell: bigint, limitSell: bigint): bigint {
+  if (limitSell <= 0n) return limitBuy;
+  return (limitBuy * filledSell) / limitSell;
+}
+
 /** Surplus on a BUY order: sellToken the user keeps, valued in native. */
 export function scoreOfBuy({ spentSellAmount, limitSellAmount, sellTokenPrice }: BuyScoreInput): bigint | null {
   if (sellTokenPrice === undefined) return null;

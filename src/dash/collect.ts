@@ -440,7 +440,7 @@ async function collectSolver(db: Db) {
     db.all(`SELECT o.order_hash, o.pair, o.resolved_at_ms, o.won, o.score_margin_bps,
                    o.our_best_venue, o.our_score, o.cow_winner_score, o.cow_reference_score,
                    o.cow_solver_count, o.size_usd, o.bid_at_ms, o.rival_count, o.best_rival_solver,
-                   o.surplus_usd, o.edge_usd, o.fee_usd, o.order_kind,
+                   o.surplus_usd, o.edge_usd, o.fee_usd, o.order_kind, o.partially_fillable,
                    (SELECT count(*) FROM ticks t WHERE t.order_hash = o.order_hash) AS quote_rounds,
                    (SELECT bool_and(h.held = 1) FROM quote_holds h WHERE h.order_hash = o.order_hash) AS all_held,
                    (SELECT max(h.slippage_bps) FROM quote_holds h WHERE h.order_hash = o.order_hash) AS worst_slippage_bps
@@ -492,6 +492,7 @@ async function collectSolver(db: Db) {
                    string_agg(DISTINCT o.pair, ', ') AS pairs,
                    string_agg(DISTINCT o.our_best_venue, ', ') AS venues,
                    bool_or(o.target_bid) AS target_bid,
+                   bool_or(o.partially_fillable = 1) AS has_partial,
                    -- Whether the price survived, carried up to the batch so the
                    -- question does not require dropping to the per-order table.
                    -- Aggregated from a join rather than correlated subqueries,
@@ -615,6 +616,7 @@ async function collectSolver(db: Db) {
       maxRivals: b.max_rivals === null ? null : Number(b.max_rivals),
       ordersWeWin: Number(b.orders_we_win),
       targetBid: b.target_bid === true,
+      hasPartial: b.has_partial === true,
       holdChecks: Number(b.hold_checks ?? 0),
       holdsKept: Number(b.holds_kept ?? 0),
       worstSlippageBps: b.worst_slippage_bps === null || b.worst_slippage_bps === undefined
@@ -686,6 +688,9 @@ async function collectSolver(db: Db) {
       slippageBps: r.worst_slippage_bps === null ? null : Number(r.worst_slippage_bps),
       bidLeadMs: r.bid_at_ms === null ? null : Number(r.resolved_at_ms) - Number(r.bid_at_ms),
       kind: r.order_kind,
+      // Flagged, not hidden: our advantage on these comes from quoting the whole
+      // order while rivals filled a slice, which is volume rather than price.
+      partial: r.partially_fillable === 1,
       surplusUsd: r.surplus_usd === null ? null : Number(r.surplus_usd),
       edgeUsd: r.edge_usd === null ? null : Number(r.edge_usd),
       feeUsd: r.fee_usd === null ? null : Number(r.fee_usd),

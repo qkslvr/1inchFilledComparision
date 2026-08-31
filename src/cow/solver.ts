@@ -32,7 +32,7 @@ import { walkBuyBaseFloat, walkSellBaseFloat } from '../bebop/depth.js';
 import { walkBuyBase, walkSellBase } from '../kalqix/book.js';
 import { parseAuctionSnapshot, type CowAuctionSnapshot } from './competition.js';
 import { fetchSignedOrder, type CowSignedOrder } from './orders.js';
-import { scoreOf, scoreOfBuy, scoreMarginBps, notionalNative, wouldHaveWon } from './score.js';
+import { scoreOf, scoreOfBuy, scoreMarginBps, notionalNative, proRataLimit, wouldHaveWon } from './score.js';
 import { tokenDecimals, tokenSymbol, weiToTokenViaUsd } from './tokens.js';
 import { takePollSlot } from './pollgate.js';
 import { getJson, getJsonOrNull, HttpStatusError } from '../http/json.js';
@@ -430,15 +430,23 @@ function rivalScore(
   p: { buyAmount: bigint; sellAmount: bigint },
   prices: Map<string, bigint>
 ): bigint | null {
+  // A partial fill only has to clear its share of the limit. Without this every
+  // partial scores zero and a full-size quote wins on volume rather than price.
+  const limitBuy = t.order.partiallyFillable
+    ? proRataLimit(t.order.buyAmount, p.sellAmount, t.order.sellAmount)
+    : t.order.buyAmount;
+  const limitSell = t.order.partiallyFillable
+    ? proRataLimit(t.order.sellAmount, p.buyAmount, t.order.buyAmount)
+    : t.order.sellAmount;
   return t.order.kind === 'sell'
     ? scoreOf({
         ourBuyAmount: p.buyAmount,
-        limitBuyAmount: t.order.buyAmount,
+        limitBuyAmount: limitBuy,
         buyTokenPrice: prices.get(t.order.buyToken),
       })
     : scoreOfBuy({
         spentSellAmount: p.sellAmount,
-        limitSellAmount: t.order.sellAmount,
+        limitSellAmount: limitSell,
         sellTokenPrice: prices.get(t.order.sellToken),
       });
 }
