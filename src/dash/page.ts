@@ -271,12 +271,23 @@ function solverCard(v) {
 function batchRow(b) {
   // Rank is what a batch view is for: losing to seven solvers and losing to one
   // are different outcomes, and an order-level win/lose flag hides that.
-  // The field includes us: ranking 2nd against a single rival is "2 of 2", not
-  // "2 of 1", which is what it read before.
-  var field = b.solvers === null ? null : b.solvers + 1;
-  var rank = b.bestRank === null || field === null ? '<span class="mut">\u2014</span>'
-    : b.bestRank === 1 ? '<span class="chip win">1st of ' + field + '</span>'
-    : '<span class="chip">' + b.bestRank + ' of ' + field + '</span>';
+  // The field includes us: ranking 2nd against a single rival is "2 of 2".
+  //
+  // A batch can hold more than one order, and they can rank differently — one
+  // batch showed "1st of 7" beside a negative edge because the rank came from
+  // one order and the summed edge from another. Where they differ, say so
+  // rather than quietly reporting the best of them.
+  var field = b.maxRivals === null ? (b.solvers === null ? null : b.solvers + 1) : b.maxRivals + 1;
+  var rank;
+  if (b.bestRank === null || field === null) {
+    rank = '<span class="mut">\u2014</span>';
+  } else if (b.worstRank !== null && b.worstRank !== b.bestRank) {
+    rank = '<span class="chip">' + b.bestRank + '\u2013' + b.worstRank + ' of ' + field + '</span>';
+  } else if (b.bestRank === 1) {
+    rank = '<span class="chip win">1st of ' + field + '</span>';
+  } else {
+    rank = '<span class="chip">' + b.bestRank + ' of ' + field + '</span>';
+  }
   function num(v, text, cls) {
     return '<td class="num ' + (cls || '') + '" data-v="' + (v === null || v === undefined ? -1e9 : v) + '">' + text + '</td>';
   }
@@ -303,7 +314,8 @@ function batchSection(c) {
   var h = '<div class="eyebrow">BATCHES</div>';
   h += '<p class="mut" style="font-size:12px;margin:0 0 8px;line-height:1.7">'
     + 'One row per auction rather than per order. CoW settles a batch at a time; on this chain a batch is a single order about 90% of the time and two in the rest.<br>'
-    + '<b>rank</b> is where our bid would have placed among the solvers who bid on that batch \u2014 losing to seven is not the same outcome as losing to one. <b>target</b> marks batches the solver we are measuring against took part in.'
+    + '<b>surplus</b> = what we would hand the user above their limit price, after gas and our fee. <b>edge</b> = our surplus minus the best rival\u2019s on the same order, in dollars.<br>'
+    + '<b>rank</b> is where our bid would have placed among the solvers who bid on that batch \u2014 losing to seven is not the same as losing to one. A range like 2\u20135 means the batch held several orders that ranked differently. <b>target</b> marks batches the solver we are measuring against took part in.'
     + '</p>';
   var headers = ['TIME', 'AUCTION', '$ORDERS', 'PAIRS', '$SIZE', '$SOLVERS', 'OUR RANK', '$SURPLUS', '$EDGE', 'TARGET'];
   h += '<table id="batchtbl"><thead><tr>'
