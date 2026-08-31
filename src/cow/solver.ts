@@ -705,7 +705,8 @@ async function resolve(
       edge: ourScore !== null && bestRivalScore !== null ? toUsd(ourScore - bestRivalScore) : null,
       fee: feeUsd,
     },
-    target
+    target,
+    { buy: prices.get(t.order.buyToken), sell: prices.get(t.order.sellToken) }
   );
   db.setTerminal(t.order.uid, 'filled', null, t.order.sellAmount, settledBuyAmount);
   await db.all(`UPDATE orders SET terminal_at_ms = ? WHERE order_hash = ?`, [now, t.order.uid]);

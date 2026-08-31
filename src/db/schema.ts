@@ -99,6 +99,12 @@ export const MIGRATIONS: string[] = [
   // Where our bid would have slotted into the field, not just whether it beat
   // the top of it. "Third of eight" is a different claim from "did not win".
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS our_rank INTEGER`,
+  // The auction's own price for each leg, native wei per token atom, 1e18
+  // scaled. Every score is computed through these, and without them a scoring
+  // correction can only be applied where the old score happened to be non-zero
+  // — which limited a partial-fill fix to 29 of 107 affected rows.
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS buy_token_price TEXT`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS sell_token_price TEXT`,
   // Every proposal on every order, so a batch can show the whole ladder rather
   // than the maximum. We were computing the best rival and discarding the rest.
   `CREATE TABLE IF NOT EXISTS solution_bids (
@@ -217,7 +223,9 @@ CREATE TABLE IF NOT EXISTS orders (
   target_rank        INTEGER,
   beat_target        BOOLEAN,
   vs_target_bps      DOUBLE PRECISION,
-  our_rank           INTEGER
+  our_rank           INTEGER,
+  buy_token_price    TEXT,
+  sell_token_price   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS solution_bids (
