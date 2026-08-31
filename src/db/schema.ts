@@ -114,6 +114,13 @@ export const MIGRATIONS: string[] = [
   // How many orders the winner's solution covered, so a verdict drawn from a
   // bundle we only partly observed can be told apart from a complete one.
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS batch_size INTEGER`,
+  // CoW's own score for the solution a proposal belongs to, and how many orders
+  // that solution covered. Reconstructing a rival's score from the amounts it
+  // delivered runs ~3% light on ordinary orders and ~70% light on partial fills,
+  // and since the verdict is "our score beats theirs", a short yardstick handed
+  // us 74% of our wins. The published score settles it.
+  `ALTER TABLE solution_bids ADD COLUMN IF NOT EXISTS solution_score TEXT`,
+  `ALTER TABLE solution_bids ADD COLUMN IF NOT EXISTS solution_orders INTEGER`,
   // Every proposal on every order, so a batch can show the whole ladder rather
   // than the maximum. We were computing the best rival and discarding the rest.
   `CREATE TABLE IF NOT EXISTS solution_bids (
@@ -124,6 +131,8 @@ export const MIGRATIONS: string[] = [
      buy_amount  TEXT,
      sell_amount TEXT,
      score       TEXT,
+     solution_score  TEXT,
+     solution_orders INTEGER,
      PRIMARY KEY (order_hash, solver)
    )`,
   `CREATE INDEX IF NOT EXISTS idx_bids_order ON solution_bids(order_hash)`,

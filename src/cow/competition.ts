@@ -97,7 +97,25 @@ export interface CowAuctionSnapshot {
    *  each solution *does* report per order is the buyAmount it would deliver,
    *  and that is directly comparable: scored against the same limit and the same
    *  auction price, it is what a rival offered on the order we bid on. */
-  proposalsByOrder: Map<string, Array<{ solver: string; buyAmount: bigint; sellAmount: bigint; isWinner: boolean; ranking: number | null }>>;
+  proposalsByOrder: Map<
+    string,
+    Array<{
+      solver: string;
+      buyAmount: bigint;
+      sellAmount: bigint;
+      isWinner: boolean;
+      ranking: number | null;
+      /** The score CoW assigned to the whole solution this proposal belongs to,
+       *  and how many orders that solution covered. Reconstructing a rival's
+       *  score from amounts runs about 3% light on ordinary orders and 70% light
+       *  on partial fills, which decided auctions in our favour that we lost.
+       *  Carried per solution rather than per auction because an auction can
+       *  have several non-overlapping winners, and the old per-auction field
+       *  gave every order the first winner's score. */
+      solutionScore: bigint | null;
+      solutionOrders: number;
+    }>
+  >;
 }
 
 export function parseAuctionSnapshot(raw: RawCompetition): CowAuctionSnapshot | null {
@@ -111,7 +129,7 @@ export function parseAuctionSnapshot(raw: RawCompetition): CowAuctionSnapshot | 
       // a price we cannot parse is simply a token we cannot score
     }
   }
-  const proposalsByOrder = new Map<string, Array<{ solver: string; buyAmount: bigint; sellAmount: bigint; isWinner: boolean; ranking: number | null }>>();
+  const proposalsByOrder: CowAuctionSnapshot['proposalsByOrder'] = new Map();
   for (const sol of raw.solutions ?? []) {
     for (const o of sol.orders ?? []) {
       if (!o.id || !o.buyAmount || !o.sellAmount) continue;
@@ -123,6 +141,8 @@ export function parseAuctionSnapshot(raw: RawCompetition): CowAuctionSnapshot | 
         sellAmount: BigInt(o.sellAmount),
         isWinner: sol.isWinner === true,
         ranking: typeof sol.ranking === 'number' ? sol.ranking : null,
+        solutionScore: sol.score ? BigInt(sol.score) : null,
+        solutionOrders: (sol.orders ?? []).length,
       });
       proposalsByOrder.set(o.id, list);
     }

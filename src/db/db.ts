@@ -751,12 +751,17 @@ export class Db {
     isWinner: boolean,
     buyAmount: bigint,
     sellAmount: bigint,
-    score: bigint | null
+    score: bigint | null,
+    /** CoW's own score for the whole solution, and its order count. */
+    solution?: { score: bigint | null; orders: number }
   ): void {
     this.enqueue(
-      `INSERT INTO solution_bids (order_hash, solver, ranking, is_winner, buy_amount, sell_amount, score)
-       VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (order_hash, solver) DO NOTHING`,
-      [orderHash, solver, ranking, isWinner ? 1 : 0, s(buyAmount), s(sellAmount), s(score)]
+      `INSERT INTO solution_bids
+         (order_hash, solver, ranking, is_winner, buy_amount, sell_amount, score,
+          solution_score, solution_orders)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (order_hash, solver) DO NOTHING`,
+      [orderHash, solver, ranking, isWinner ? 1 : 0, s(buyAmount), s(sellAmount), s(score),
+       s(solution?.score ?? null), solution?.orders ?? null]
     );
   }
 

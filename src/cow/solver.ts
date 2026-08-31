@@ -626,7 +626,10 @@ async function resolve(
   for (const p of proposals) {
     const rs = rivalScore(t, p, prices, referenceSell);
     ladder.push({ solver: p.solver, score: rs });
-    db.insertSolutionBid(t.order.uid, p.solver, p.ranking, p.isWinner, p.buyAmount, p.sellAmount, rs);
+    db.insertSolutionBid(t.order.uid, p.solver, p.ranking, p.isWinner, p.buyAmount, p.sellAmount, rs, {
+      score: p.solutionScore,
+      orders: p.solutionOrders,
+    });
     if (rs === null) continue;
     if (bestRivalScore === null || rs > bestRivalScore) {
       bestRivalScore = rs;
