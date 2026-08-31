@@ -222,6 +222,9 @@ function usdShort(v) {
   return '$' + v.toFixed(2);
 }
 
+// Sixteen tiles. The grid is auto-fit, so an odd count leaves a stranded tile on
+// a row of its own — which is what a seventeenth did. The won-only hold rate is
+// still in the payload and on the venue cards; it just did not earn a slot here.
 function overviewCard(c) {
   var o = c.solver.overview;
   return '<div class="overview">'
@@ -238,7 +241,6 @@ function overviewCard(c) {
     + ov('MEDIAN TRADE', usdShort(o.medianSizeUsd), null)
     + ov('BIDS WON', o.decided > 0 ? o.bidsWon.toLocaleString('en-US') : '\u2014', o.decided > 0 ? pct(100 * o.bidsWon / o.decided) + ' of ' + o.decided.toLocaleString('en-US') + ' decided' : 'nothing decided yet')
     + ov('QUOTE HELD', pct(o.heldPct), 'all re-quotes')
-    + ov('QUOTE HELD / WON', pct(o.heldWonPct), 'bids we won')
     + ov('MEDIAN EDGE', bps(o.medianMarginBps), 'vs best rival, on trades we won')
     + ov('SURPLUS DELIVERED', usdShort(o.surplusUsd), 'above user limits, on trades we won')
     + ov('OUR FEE', usdShort(o.feeUsd), 'our markup, on top of surplus')

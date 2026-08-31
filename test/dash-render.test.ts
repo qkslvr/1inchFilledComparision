@@ -154,3 +154,14 @@ test('a populated dataset renders, including the target-solver strip', () => {
   assert.ok(html.includes('VS TARGET SOLVER'), 'the target strip is missing');
   assert.ok(html.includes('ETH_USDC'), 'the trade row did not render');
 });
+
+test('the overview grid fills whole rows', () => {
+  // auto-fit at minmax(132px, 1fr): an odd tile count strands one on a row of
+  // its own, which is what a seventeenth did. Counted on overviewCard alone —
+  // chainSection also renders the target strip out of the same ov() helper, so
+  // counting the section would measure both and drift for the wrong reason.
+  const api = evalPage();
+  const card = api.overviewCard!(emptyChain) as string;
+  const tiles = (card.match(/<div class="ov">/g) ?? []).length;
+  assert.equal(tiles % 8, 0, `overview has ${tiles} tiles, which does not fill whole rows`);
+});
