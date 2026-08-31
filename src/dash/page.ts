@@ -291,7 +291,21 @@ function batchRow(b) {
   function num(v, text, cls) {
     return '<td class="num ' + (cls || '') + '" data-v="' + (v === null || v === undefined ? -1e9 : v) + '">' + text + '</td>';
   }
+  // A batch can hold several orders, each re-quoted at two delays on every venue
+  // that priced it, so this is "how many of those checks still had the price"
+  // rather than a single yes or no.
+  var held;
+  if (!b.holdChecks) {
+    held = '<td><span class="mut">\u2014</span></td>';
+  } else if (b.holdsKept === b.holdChecks) {
+    held = '<td><span class="chip win">' + b.holdsKept + '/' + b.holdChecks + '</span></td>';
+  } else if (b.holdsKept === 0) {
+    held = '<td><span class="chip short">0/' + b.holdChecks + '</span></td>';
+  } else {
+    held = '<td><span class="chip">' + b.holdsKept + '/' + b.holdChecks + '</span></td>';
+  }
   return '<tr'
+    + ' data-held="' + (b.holdChecks && b.holdsKept === b.holdChecks ? 'held' : b.holdChecks ? 'slipped' : '') + '"'
     + ' data-text="' + esc(((b.pairs || '') + ' ' + (b.venues || '')).toLowerCase()) + '"'
     + ' data-won="' + (b.ordersWeWin > 0 ? 'won' : 'lost') + '"'
     + ' data-venue="' + esc((b.venues || '').split(',')[0].trim()) + '">'

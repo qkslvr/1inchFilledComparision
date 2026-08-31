@@ -37,7 +37,7 @@ function evalPage(): Record<string, Function> {
   };
   const fn = new Function(
     ...Object.keys(sandbox),
-    `${script}\n return { chainSection, overviewCard, solverSection, solverCard, solverRow };`
+    `${script}\n return { chainSection, overviewCard, solverSection, solverCard, solverRow, batchRow, batchSection };`
   );
   return fn(...Object.values(sandbox)) as Record<string, Function>;
 }
@@ -65,7 +65,18 @@ const emptyChain = {
     },
     coverage: { tracked: 0, resolved: 0, bid: 0 },
     rows: [],
+    batches: [],
   },
+};
+
+/** A batch row, so batchRow is actually called. It was not: the empty fixture
+ *  made batchSection return early, so a ReferenceError in it reached production
+ *  with every test passing. */
+const aBatch = {
+  auctionId: 8699871, time: '10:00:00', tsMs: 1, orders: 2, pairs: 'ETH_USDC',
+  venues: 'kyber', sizeUsd: 13000, surplusUsd: 263.14, edgeUsd: 90.39,
+  solvers: 14, rivals: 14, maxRivals: 14, bestRank: 1, worstRank: 2,
+  ordersWeWin: 1, targetBid: false, holdChecks: 4, holdsKept: 3, worstSlippageBps: 249,
 };
 
 test('the page script evaluates and exposes its renderers', () => {
@@ -101,6 +112,20 @@ test('every table row has exactly as many cells as the header has columns', () =
   }) as string;
   const headerCells = (section.match(/<th class="sortable/g) ?? []).length;
   assert.equal(cells, headerCells, `row emits ${cells} cells for ${headerCells} columns`);
+});
+
+test('a batch row renders, including its hold counts', () => {
+  const api = evalPage();
+  const html = api.batchRow!(aBatch) as string;
+  assert.ok(html.includes('3/4'), 'hold counts missing');
+  assert.ok(html.includes('1\u20132 of 15'), 'rank range or field size wrong');
+  const cells = (html.match(/<td/g) ?? []).length;
+  assert.equal(cells, 12, `batch row emits ${cells} cells for 12 columns`);
+});
+
+test('an empty batch list does not break the section', () => {
+  const api = evalPage();
+  assert.equal(api.batchSection!({ ...emptyChain }), '');
 });
 
 test('a populated dataset renders, including the target-solver strip', () => {
