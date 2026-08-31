@@ -48,6 +48,21 @@ export function proRataLimit(limitBuy: bigint, filledSell: bigint, limitSell: bi
   return (limitBuy * filledSell) / limitSell;
 }
 
+/** Restate an offer at a common fill size, so two solvers are compared on rate.
+ *
+ *  A solver taking 1.8% of an order and one quoting the whole of it are not
+ *  comparable in absolute terms — the second wins on volume no matter how much
+ *  worse its price. Scaling both to the size that actually settled reduces the
+ *  comparison to price per unit, which is the only part we can honestly claim.
+ *
+ *  Linear scaling is conservative for us: a smaller trade gets a better rate
+ *  than a larger one, so applying our full-size rate to a small slice understates
+ *  what we would really have achieved. */
+export function atFillSize(offered: bigint, offeredFor: bigint, referenceSize: bigint): bigint | null {
+  if (offeredFor <= 0n) return null;
+  return (offered * referenceSize) / offeredFor;
+}
+
 /** Surplus on a BUY order: sellToken the user keeps, valued in native. */
 export function scoreOfBuy({ spentSellAmount, limitSellAmount, sellTokenPrice }: BuyScoreInput): bigint | null {
   if (sellTokenPrice === undefined) return null;

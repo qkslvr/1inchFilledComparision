@@ -32,7 +32,7 @@ import { walkBuyBaseFloat, walkSellBaseFloat } from '../bebop/depth.js';
 import { walkBuyBase, walkSellBase } from '../kalqix/book.js';
 import { parseAuctionSnapshot, type CowAuctionSnapshot } from './competition.js';
 import { fetchSignedOrder, type CowSignedOrder } from './orders.js';
-import { scoreOf, scoreOfBuy, scoreMarginBps, notionalNative, proRataLimit, wouldHaveWon } from './score.js';
+import { scoreOf, scoreOfBuy, scoreMarginBps, notionalNative, proRataLimit, atFillSize, wouldHaveWon } from './score.js';
 import { tokenDecimals, tokenSymbol, weiToTokenViaUsd } from './tokens.js';
 import { takePollSlot } from './pollgate.js';
 import { getJson, getJsonOrNull, HttpStatusError } from '../http/json.js';
@@ -377,8 +377,24 @@ const attempts = new Map<string, number>();
  *        as good: the linear estimate over-states our input and therefore
  *        under-states our surplus, which is the safe direction to be wrong in.
  */
-function bidScore(t: Tracked, q: VenueQuote, prices: Map<string, bigint>): bigint | null {
+function bidScore(
+  t: Tracked,
+  q: VenueQuote,
+  prices: Map<string, bigint>,
+  referenceSell?: bigint
+): bigint | null {
   if (t.order.kind === 'sell') {
+    // On a partially fillable order, compare at the size that settled rather
+    // than at the whole order: otherwise we win on volume, not on price.
+    if (referenceSell !== undefined && referenceSell < t.order.sellAmount) {
+      const ourAtRef = atFillSize(q.net, t.order.sellAmount, referenceSell);
+      if (ourAtRef === null) return null;
+      return scoreOf({
+        ourBuyAmount: ourAtRef,
+        limitBuyAmount: proRataLimit(t.order.buyAmount, referenceSell, t.order.sellAmount),
+        buyTokenPrice: prices.get(t.order.buyToken),
+      });
+    }
     return scoreOf({
       ourBuyAmount: q.net,
       limitBuyAmount: t.order.buyAmount,
@@ -428,27 +444,27 @@ function shortfallBps(t: Tracked, q: VenueQuote): number | null {
 function rivalScore(
   t: Tracked,
   p: { buyAmount: bigint; sellAmount: bigint },
-  prices: Map<string, bigint>
+  prices: Map<string, bigint>,
+  referenceSell?: bigint
 ): bigint | null {
-  // A partial fill only has to clear its share of the limit. Without this every
-  // partial scores zero and a full-size quote wins on volume rather than price.
-  const limitBuy = t.order.partiallyFillable
-    ? proRataLimit(t.order.buyAmount, p.sellAmount, t.order.sellAmount)
-    : t.order.buyAmount;
-  const limitSell = t.order.partiallyFillable
-    ? proRataLimit(t.order.sellAmount, p.buyAmount, t.order.buyAmount)
-    : t.order.sellAmount;
-  return t.order.kind === 'sell'
-    ? scoreOf({
-        ourBuyAmount: p.buyAmount,
-        limitBuyAmount: limitBuy,
-        buyTokenPrice: prices.get(t.order.buyToken),
-      })
-    : scoreOfBuy({
-        spentSellAmount: p.sellAmount,
-        limitSellAmount: limitSell,
-        sellTokenPrice: prices.get(t.order.sellToken),
-      });
+  if (t.order.kind === 'sell') {
+    // Every offer restated at the same fill size, so the comparison is rate
+    // against rate. A partial fill judged against the whole-order limit scores
+    // zero however good its price, which is what inverted an entire row.
+    const ref = referenceSell ?? p.sellAmount;
+    const theirsAtRef = atFillSize(p.buyAmount, p.sellAmount, ref);
+    if (theirsAtRef === null) return null;
+    return scoreOf({
+      ourBuyAmount: theirsAtRef,
+      limitBuyAmount: proRataLimit(t.order.buyAmount, ref, t.order.sellAmount),
+      buyTokenPrice: prices.get(t.order.buyToken),
+    });
+  }
+  return scoreOfBuy({
+    spentSellAmount: p.sellAmount,
+    limitSellAmount: proRataLimit(t.order.sellAmount, p.buyAmount, t.order.buyAmount),
+    sellTokenPrice: prices.get(t.order.sellToken),
+  });
 }
 
 /** Write one quote round as a tick, and update the standing bid.
@@ -558,7 +574,12 @@ async function checkHolds(t: Tracked, bidQuotes: Map<Venue, VenueQuote>, won: bo
 }
 
 /** t1: the auction closed. Freeze the bid and grade it. */
-async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: bigint): Promise<void> {
+async function resolve(
+  t: Tracked,
+  snap: CowAuctionSnapshot,
+  settledBuyAmount: bigint,
+  settledSellAmount?: bigint
+): Promise<void> {
   const now = Date.now();
   const bidQuotes = t.lastQuotes;
   tracked.delete(t.order.uid);
@@ -566,10 +587,17 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
 
   // Prefer the auction's own price vector; fall back to the last one we saw.
   const prices = snap.prices.size > 0 ? snap.prices : latestPrices;
+  // The size that actually settled is the common yardstick for a partially
+  // fillable order — everyone's offer is restated at it, so the comparison is
+  // price per unit rather than who was willing to do more volume.
+  const referenceSell =
+    t.order.partiallyFillable && settledSellAmount !== undefined && settledSellAmount > 0n
+      ? settledSellAmount
+      : undefined;
   let ourScore: bigint | null = null;
   let best: { venue: Venue; q: VenueQuote } | null = null;
   for (const [venue, q] of bidQuotes) {
-    const sc = bidScore(t, q, prices);
+    const sc = bidScore(t, q, prices, referenceSell);
     if (sc === null) continue;
     if (ourScore === null || sc > ourScore) {
       ourScore = sc;
@@ -595,7 +623,7 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
   // batch view has nothing to show without it.
   const ladder: Array<{ solver: string; score: bigint | null }> = [];
   for (const p of proposals) {
-    const rs = rivalScore(t, p, prices);
+    const rs = rivalScore(t, p, prices, referenceSell);
     ladder.push({ solver: p.solver, score: rs });
     db.insertSolutionBid(t.order.uid, p.solver, p.ranking, p.isWinner, p.buyAmount, p.sellAmount, rs);
     if (rs === null) continue;
@@ -618,7 +646,12 @@ async function resolve(t: Tracked, snap: CowAuctionSnapshot, settledBuyAmount: b
   const hadBid = ourScore !== null && ourScore > 0n;
   const notional =
     t.order.kind === 'sell'
-      ? notionalNative(t.order.buyAmount, prices.get(t.order.buyToken))
+      ? notionalNative(
+          referenceSell === undefined
+            ? t.order.buyAmount
+            : proRataLimit(t.order.buyAmount, referenceSell, t.order.sellAmount),
+          prices.get(t.order.buyToken)
+        )
       : notionalNative(t.order.sellAmount, prices.get(t.order.sellToken));
   const margin =
     hadBid && bestRivalScore !== null && notional !== null
@@ -780,7 +813,7 @@ async function quoteAndResolveNow(
     tracked.set(uid, t);
     discovered++;
     await quoteRound(t);
-    await resolve(t, snap, settled.buyAmount);
+    await resolve(t, snap, settled.buyAmount, settled.sellAmount);
   } finally {
     registering.delete(uid);
   }
@@ -1046,7 +1079,7 @@ async function settleFrom(snap: CowAuctionSnapshot): Promise<void> {
     settlementsSeen++;
     const t = tracked.get(s.uid);
     if (t) {
-      await resolve(t, snap, s.buyAmount);
+      await resolve(t, snap, s.buyAmount, s.sellAmount);
       continue;
     }
     // Where an order is only ever visible in the auction that settles it, there
