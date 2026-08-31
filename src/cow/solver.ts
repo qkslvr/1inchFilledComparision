@@ -341,6 +341,10 @@ interface Tracked {
   lastQuotes: Map<Venue, VenueQuote>;
   lastQuoteAtMs: number;
   discoveredAtMs: number;
+  /** The USD size written to the order row. The fee has to bill exactly this,
+   *  not a fresh valuation: recomputing it at resolve time read a later quote
+   *  and put the fee 0.2% away from 5 bps of the size shown beside it. */
+  sizeUsd: number | null;
 }
 
 const tracked = new Map<string, Tracked>();
@@ -704,9 +708,7 @@ async function resolve(
   // Scaling by the fill fraction matters just as much: the score is computed at
   // the size that settled, so a fee charged on the whole order was comparing a
   // slice of surplus against a fee on the entire limit.
-  const sizeUsdWhole =
-    (t.pair && t.direction ? sizeUsdOf(t.order, t.pair, t.direction) : null) ??
-    sizeUsdFromQuote(bidQuotes);
+  const sizeUsdWhole = t.sizeUsd;
   const fillFraction =
     referenceSell !== undefined && t.order.sellAmount > 0n
       ? Number(referenceSell) / Number(t.order.sellAmount)
@@ -806,6 +808,7 @@ async function quoteAndResolveNow(
       registered: false, quoteRounds: 0,
       lastQuotes: new Map(), lastQuoteAtMs: 0,
       discoveredAtMs: Date.now(),
+      sizeUsd: null,
     };
     const quotes = await quoteVenues(t);
     if (quotes.size === 0) {
@@ -813,6 +816,9 @@ async function quoteAndResolveNow(
       dropReason.noQuote++;
       return;
     }
+    const sizeUsd =
+      (match ? sizeUsdOf(order, match.pair, match.direction) : null) ?? sizeUsdFromQuote(quotes);
+    t.sizeUsd = sizeUsd;
     await db.insertOrder({
       orderHash: order.uid, runId, receivedAtMs: Date.now(), source: 'auction', lateSeen: true,
       makerAsset: order.sellToken, takerAsset: order.buyToken,
@@ -821,7 +827,7 @@ async function quoteAndResolveNow(
       pair: match ? match.pair.ticker : `${sellSymbol ?? tokenLabel(order.sellToken)}/${buySymbol ?? tokenLabel(order.buyToken)}`,
       direction: match ? match.direction : null,
       hedgeAssetKind: null, eligible: true, kyberOnly: false, skipReason: null,
-      sizeUsd: (match ? sizeUsdOf(order, match.pair, match.direction) : null) ?? sizeUsdFromQuote(quotes),
+      sizeUsd,
       auctionStartMs: null, auctionDurationS: null, initialRateBump: null, auctionPointsJson: null,
       gasBumpEstimate: null, gasPriceEstimate: null,
       allowPartialFills: order.partiallyFillable, allowMultipleFills: null,
@@ -890,6 +896,7 @@ async function consider(uid: string): Promise<Verdict> {
   ]);
   const t: Tracked = {
     order,
+    sizeUsd: null,
     sellSymbol,
     buySymbol,
     pair: match ? match.pair : null,
@@ -917,6 +924,9 @@ async function consider(uid: string): Promise<Verdict> {
     return 'done';
   }
 
+  const sizeUsd =
+    (match ? sizeUsdOf(order, match.pair, match.direction) : null) ?? sizeUsdFromQuote(quotes);
+  t.sizeUsd = sizeUsd;
   await db.insertOrder({
     orderHash: order.uid,
     runId,
@@ -935,7 +945,7 @@ async function consider(uid: string): Promise<Verdict> {
     eligible: true,
     kyberOnly: false,
     skipReason: null,
-    sizeUsd: (match ? sizeUsdOf(order, match.pair, match.direction) : null) ?? sizeUsdFromQuote(quotes),
+    sizeUsd,
     auctionStartMs: null,
     auctionDurationS: null,
     initialRateBump: null,
