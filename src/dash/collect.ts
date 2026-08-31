@@ -460,9 +460,20 @@ async function collectSolver(db: Db) {
                    count(*) FILTER (WHERE our_score IS NOT NULL) AS bid,
                    count(*) FILTER (WHERE batch_won = 1) AS won,
                    count(*) FILTER (WHERE batch_won IS NOT NULL) AS decided,
-                   sum(surplus_usd) AS surplus_usd, sum(fee_usd) AS fee_usd,
+                   -- Money only from trades we would actually have won. These
+                   -- used to sum the whole table while the two counts above were
+                   -- already filtered, so one card described two populations: it
+                   -- booked $66k of fee on orders we lost, which is revenue on
+                   -- business that never happened, and two thirds of the surplus
+                   -- sat on rows from before solution_bids existed and so could
+                   -- not be decided either way.
+                   sum(surplus_usd) FILTER (WHERE batch_won = 1) AS surplus_usd,
+                   sum(fee_usd) FILTER (WHERE batch_won = 1) AS fee_usd,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY score_margin_bps) AS median_margin_bps,
                    sum(size_usd) AS volume_usd,
+                   -- The denominator for that fee. Without it $1.6k floats free
+                   -- and no one can check it is 5 bps of anything.
+                   sum(size_usd) FILTER (WHERE batch_won = 1) AS volume_won_usd,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY size_usd) AS median_size_usd,
                    min(received_at_ms) AS first_ms, max(received_at_ms) AS last_ms
             FROM orders`),
@@ -657,6 +668,10 @@ async function collectSolver(db: Db) {
       otherPct: share(other),
       classified,
       volumeUsd: coverage?.volume_usd === null || coverage?.volume_usd === undefined ? null : Number(coverage.volume_usd),
+      volumeWonUsd:
+        coverage?.volume_won_usd === null || coverage?.volume_won_usd === undefined
+          ? null
+          : Number(coverage.volume_won_usd),
       medianSizeUsd:
         coverage?.median_size_usd === null || coverage?.median_size_usd === undefined
           ? null
