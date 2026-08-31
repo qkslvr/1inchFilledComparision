@@ -494,6 +494,20 @@ async function collectSolver(db: Db) {
                    string_agg(DISTINCT o.pair, ', ') AS pairs,
                    string_agg(DISTINCT o.our_best_venue, ', ') AS venues,
                    bool_or(o.target_bid) AS target_bid
+                   -- Whether the price survived, carried up to the batch so the
+                   -- question does not require dropping to the per-order table.
+                   (SELECT count(*) FROM quote_holds h
+                     WHERE h.order_hash IN (
+                       SELECT x.order_hash FROM orders x WHERE x.cow_auction_id = o.cow_auction_id))
+                     AS hold_checks,
+                   (SELECT sum(h.held) FROM quote_holds h
+                     WHERE h.order_hash IN (
+                       SELECT x.order_hash FROM orders x WHERE x.cow_auction_id = o.cow_auction_id))
+                     AS holds_kept,
+                   (SELECT max(h.slippage_bps) FROM quote_holds h
+                     WHERE h.order_hash IN (
+                       SELECT x.order_hash FROM orders x WHERE x.cow_auction_id = o.cow_auction_id))
+                     AS worst_slippage_bps
             FROM orders o
             WHERE o.resolved_at_ms IS NOT NULL AND o.cow_auction_id IS NOT NULL
             GROUP BY 1 ORDER BY 2 DESC LIMIT 500`),
@@ -606,6 +620,11 @@ async function collectSolver(db: Db) {
       maxRivals: b.max_rivals === null ? null : Number(b.max_rivals),
       ordersWeWin: Number(b.orders_we_win),
       targetBid: b.target_bid === true,
+      holdChecks: Number(b.hold_checks ?? 0),
+      holdsKept: Number(b.holds_kept ?? 0),
+      worstSlippageBps: b.worst_slippage_bps === null || b.worst_slippage_bps === undefined
+        ? null
+        : Number(b.worst_slippage_bps),
     })),
     target: targetStats,
     overview: {

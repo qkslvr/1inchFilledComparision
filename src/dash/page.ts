@@ -294,7 +294,7 @@ function batchRow(b) {
   return '<tr'
     + ' data-text="' + esc(((b.pairs || '') + ' ' + (b.venues || '')).toLowerCase()) + '"'
     + ' data-won="' + (b.ordersWeWin > 0 ? 'won' : 'lost') + '"'
-    + ' data-venue="' + esc((b.venues || '').split(',')[0].trim()) + '" data-held="">'
+    + ' data-venue="' + esc((b.venues || '').split(',')[0].trim()) + '">'
     + '<td>' + esc(b.time) + '</td>'
     + '<td class="mut">' + b.auctionId + '</td>'
     + num(b.orders, String(b.orders))
@@ -304,6 +304,8 @@ function batchRow(b) {
     + '<td>' + rank + '</td>'
     + num(b.surplusUsd, usdShort(b.surplusUsd))
     + num(b.edgeUsd, usdShort(b.edgeUsd), b.edgeUsd > 0.005 ? 'pos' : b.edgeUsd < -0.005 ? 'neg' : '')
+    + held
+    + num(b.worstSlippageBps, bps(b.worstSlippageBps))
     + '<td>' + (b.targetBid ? '<span class="chip win">yes</span>' : '<span class="mut">\u2014</span>') + '</td>'
     + '</tr>';
 }
@@ -315,9 +317,10 @@ function batchSection(c) {
   h += '<p class="mut" style="font-size:12px;margin:0 0 8px;line-height:1.7">'
     + 'One row per auction rather than per order. CoW settles a batch at a time; on this chain a batch is a single order about 90% of the time and two in the rest.<br>'
     + '<b>surplus</b> = what we would hand the user above their limit price, after gas and our fee. <b>edge</b> = our surplus minus the best rival\u2019s on the same order, in dollars.<br>'
-    + '<b>rank</b> is where our bid would have placed among the solvers who bid on that batch \u2014 losing to seven is not the same as losing to one. A range like 2\u20135 means the batch held several orders that ranked differently. <b>target</b> marks batches the solver we are measuring against took part in.'
+    + '<b>rank</b> is where our bid would have placed among the solvers who bid on that batch \u2014 losing to seven is not the same as losing to one. A range like 2\u20135 means the batch held several orders that ranked differently.<br>'
+    + '<b>held</b> counts re-quotes that still had our price, over the total taken: every order in the batch is re-priced immediately and again 12s later, on each venue that quoted it. <b>move</b> is the worst of those shifts. Note this re-asks the same venue, so it shows the quote was stable rather than proving the fill was achievable. <b>target</b> marks batches the solver we are measuring against took part in.'
     + '</p>';
-  var headers = ['TIME', 'AUCTION', '$ORDERS', 'PAIRS', '$SIZE', '$SOLVERS', 'OUR RANK', '$SURPLUS', '$EDGE', 'TARGET'];
+  var headers = ['TIME', 'AUCTION', '$ORDERS', 'PAIRS', '$SIZE', '$SOLVERS', 'OUR RANK', '$SURPLUS', '$EDGE', 'HELD', '$MOVE', 'TARGET'];
   h += '<table id="batchtbl"><thead><tr>'
     + headers.map(function (t, i) {
         var n = t.charAt(0) === '$';
