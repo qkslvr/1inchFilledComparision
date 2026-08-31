@@ -3,10 +3,16 @@
   "buildCommand": "npm run build:static",
   "outputDirectory": "public",
   "framework": null,
-  "rewrites": [{ "source": "/data.json", "destination": "/api/data" }],
+  "rewrites": [
+    {
+      "source": "/data.json",
+      "destination": "/api/data"
+    }
+  ],
   "functions": {
     "api/data.ts": {
       "maxDuration": 15
     }
-  }
+  },
+  "cleanUrls": true
 }
