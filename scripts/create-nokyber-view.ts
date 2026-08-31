@@ -74,8 +74,11 @@ const select = cols
 const SQL = `
 CREATE SCHEMA IF NOT EXISTS ${DST};
 
-DROP MATERIALIZED VIEW IF EXISTS ${DST}.orders CASCADE;
+-- Plain view first: IF EXISTS does not save you when the relation exists under
+-- the other type, it raises DropErrorMsgWrongType. Dropping the view leaves the
+-- materialised drop a genuine no-op, and vice versa.
 DROP VIEW IF EXISTS ${DST}.orders CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS ${DST}.orders CASCADE;
 CREATE MATERIALIZED VIEW ${DST}.orders AS
 WITH bid_tick AS (
   -- The tick that formed the bid: the last one at or before we bid.
