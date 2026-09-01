@@ -3,7 +3,8 @@
 One dashboard, one chain, five venues, at the root URL. Written as discrete tasks
 so each can be done, verified and abandoned independently.
 
-Status: **awaiting decisions on Q1–Q4 below.** Nothing here is implemented yet.
+Status: decisions taken (see bottom). **Two hard blockers found by research —
+read Task 5 and Task 6 before starting.** Nothing implemented yet.
 
 ---
 
@@ -24,6 +25,19 @@ Status: **awaiting decisions on Q1–Q4 below.** Nothing here is implemented yet
 
 ---
 
+## Task 0 — Wipe and restart
+
+Decision: delete the cicada dataset and collect fresh under the new rules, rather
+than restating history. This removes the whole fee-backfill problem — no mixed
+basis, no seam to explain.
+
+- Drop `cicada_42161` and recreate from the schema. **`cowswap_solver_1` is kept**
+  — that data was explicitly asked for.
+- Back it up first anyway: a dump of `cicada_42161` is ~1 GB uncompressed and the
+  box has 1.7 GB free, so dump compressed, or accept the loss deliberately.
+- Do this **after** tasks 1, 2, 5 and 6 land, so the fresh data is collected under
+  the final rules and never needs restating again.
+
 ## Task 1 — Fee 5 bps -> 2.5 bps
 
 `config.ts`: `kalqixTakerFeeBps` and each venue's `feeBps` to `25n` in tenths, or
@@ -35,7 +49,7 @@ Every score is net of this fee, so it changes surplus, edge and the win verdict.
 - Touches: `config.ts`, `quoteVenues` in `src/cow/solver.ts`, `backfill-fees.ts`.
 - Verify: `fee_usd` = 2.5 bps of settled size on new rows; win count moves up
   slightly, since a smaller fee means a better net price.
-- **Open: Q1.**
+- No backfill: Task 0 discards the 5 bps history.
 
 ## Task 2 — Kyber slippage haircut
 
@@ -70,27 +84,59 @@ alias so existing links do not break.
 - This file belongs to `liqDashboard`, not this repo.
 - **Open: Q4.**
 
-## Task 5 — Hashflow venue
+## Task 5 — Hashflow venue  **BLOCKED: needs an API key**
 
-Pending the research agent. Expected shape, following `src/bebop/`:
-- a client that requests a quote for (sellToken, buyToken, amount) on 42161,
-- returning `VenueQuote` with `out` net of the maker's spread and our fee,
-- gas netted off like every other venue,
-- rate limiting via the same `RequestBudget` pattern as Kyber if a key is needed.
+Every taker endpoint is key-gated, including indicative price levels. Without an
+`Authorization` header Cloudflare returns 403 before the API is reached; with a
+bad one, 401. Keys come from a manual vetting process (their intake form or
+Discord) — there is no self-serve tier. **Someone has to request one before any
+of this can be built or tested.**
 
-Risk: may require an API key we do not have. Flagged for the agent.
+Once a key exists, the shape mirrors Bebop's cheap-book/expensive-quote split:
+- `GET /taker/v3/price-levels` — cumulative ladders per market maker, poll-safe
+  at ~1/s. Human units, floating point, first level is the MM's minimum size.
+- `POST /taker/v3/rfq` — the firm, signed, executable quote. Base-unit strings.
+  Read `quoteData.quoteExpiry` for validity rather than assuming a TTL.
+- Router on Arbitrum `0x55084eE0fEf03f14a305cd24286359A35D735151`, confirmed
+  deployed. Budget ~200k gas units; v3 returns no gas estimate.
+- Plain `https` with our explicit User-Agent, not the SDK — it pins axios 0.27
+  and drags in ethers and solana/web3 for a wrapper that is ten lines.
 
-## Task 6 — Hyperliquid venue
+**Fee handling — do not double count.** `quoteTokenAmount` is already net of the
+market maker's spread *and* Hashflow's protocol fee; neither is broken out. Our
+2.5 bps is expressed by sending `feesBps: 25` (tenths) so the MM widens the quote
+and rebates us, **or** by subtracting locally — never both.
 
-Pending the research agent. The honest question the agent is answering first is
-whether Hyperliquid can *fill* an Arbitrum order at all, or only *hedge* one —
-a CoW solver must deliver tokens on Arbitrum within the auction. If it is a
-hedging venue rather than a fill venue, it does not belong in the same
-best-of-five comparison and should be presented separately.
+**Overlap with Kyber.** KyberSwap lists `hashflow-v3` among its DEX ids, so Kyber
+may already be routing through Hashflow. Treating them as independent venues
+would overstate depth on overlapping pairs. Check whether Kyber's route names
+`hashflow-v3` before presenting a best-of-five as five independent sources.
 
-- Spot book walked for a size-aware price, like KalqiX.
-- Net of Hyperliquid's taker fee.
-- **Open: Q2.**
+## Task 6 — Hyperliquid venue  **it cannot fill on Arbitrum**
+
+Research is unambiguous, and worse than the question assumed:
+
+- HyperCore spot and perps live on Hyperliquid's own L1; balances are not
+  reachable from an Arbitrum call frame. HyperEVM is chain 999, not Arbitrum.
+- The Arbitrum bridge carries **USDC only**, validator-signed, 3–7 minutes each
+  way, against an auction measured in seconds.
+- **ETH and BTC do not bridge to Arbitrum at all** — HyperCore holds UETH/UBTC,
+  Unit wrappers that redeem to Ethereum L1 and native Bitcoin.
+- **There is no ARB spot market**, only a perp.
+- Spot taker fee is 7 bps at tier 0 — roughly 20× the visible spread.
+
+Decision taken: include it as a fifth fill venue anyway, as a counterfactual.
+Implementing that means its quotes enter the same `max()` as venues that can
+actually deliver, so a Hyperliquid win is a win we could not settle. **The
+dashboard must say so on the venue card**, or the number is not defensible.
+
+- `POST https://api.hyperliquid.xyz/info`, `{"type":"l2Book","coin":"@151"}`.
+  No auth, weight 2 of 1200/min. Needs a POST helper — our http client is GET-only.
+- Spot pairs are addressed by `@index`, not symbol: UETH/USDC is `@151`, UBTC
+  `@142`, USDT0 `@166`. Passing `"ETH"` silently returns the **perp** book.
+- 20 levels per side is a hard cap; books exhaust around $200–500k. A walk beyond
+  visible depth must return no quote, not an extrapolation.
+- Net 7 bps taker (≈1.4 bps on stable pairs).
 
 ## Task 7 — Correctness audit
 
@@ -107,20 +153,17 @@ the same check that found the reconstruction bug.
 
 ---
 
-## Decisions needed
+## Decisions taken
 
-**Q1 — Fee basis for history.** 2.5 bps going forward leaves the dashboard mixing
-two fee regimes, so totals are not comparable across the change. Restate every
-historical row to 2.5 bps for one consistent basis, or keep history at 5 bps and
-accept the seam?
+- **Fee history** — delete the data and restart clean under 2.5 bps (Task 0).
+- **Hyperliquid** — include as a fifth fill venue, as a counterfactual, despite
+  it being unable to settle on Arbitrum. Label it as such on the venue card.
+- **No-Kyber view** — delete entirely: matview, refresh cron, profile, script.
+- **`/liquidity`** — stop routing it; leave the app process and its data running,
+  so it is a one-line revert.
 
-**Q2 — Hyperliquid's role.** If it turns out it cannot settle on Arbitrum inside
-an auction, do you want it as a fifth *fill* venue anyway (a counterfactual: what
-if we could source there), or shown separately as a hedging reference?
+## Still open
 
-**Q3 — The no-Kyber view.** Delete it, or keep the schema and refresh cron so it
-can be brought back as a tab later? It costs a 0.9s refresh every 5 minutes.
-
-**Q4 — Removing `/liquidity`.** Confirm the AVAIL Liquidity Manager should stop
-being reachable. I would stop routing it but leave the app and its data running,
-so it is a one-line revert.
+- **A Hashflow API key.** Nothing in Task 5 can be built or tested without one,
+  and it is a manual request, not a signup. This is the critical path.
+- **Kyber/Hashflow overlap.** Whether to present them as independent venues.
