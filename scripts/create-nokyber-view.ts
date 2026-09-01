@@ -29,6 +29,18 @@ if (!url) throw new Error('DATABASE_URL is not set');
 const c = new Client({ connectionString: url });
 await c.connect();
 
+// IF EXISTS is no help here: DROP VIEW on a materialised view raises
+// DropErrorMsgWrongType, and so does DROP MATERIALIZED VIEW on a plain one. Both
+// orders of the two statements are wrong in one direction, so ask what the
+// relation actually is and issue the matching drop.
+const { rows: existing } = await c.query<{ relkind: string }>(
+  `SELECT c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = $1 AND c.relname = 'orders'`, [DST]);
+const kind = existing[0]?.relkind;
+if (kind === 'm') await c.query(`DROP MATERIALIZED VIEW ${DST}.orders CASCADE`);
+else if (kind === 'v') await c.query(`DROP VIEW ${DST}.orders CASCADE`);
+else if (kind) await c.query(`DROP TABLE ${DST}.orders CASCADE`);
+
 const { rows: cols } = await c.query<{ column_name: string }>(
   `SELECT column_name FROM information_schema.columns
    WHERE table_schema = $1 AND table_name = 'orders' ORDER BY ordinal_position`, [SRC]);
@@ -74,11 +86,6 @@ const select = cols
 const SQL = `
 CREATE SCHEMA IF NOT EXISTS ${DST};
 
--- Plain view first: IF EXISTS does not save you when the relation exists under
--- the other type, it raises DropErrorMsgWrongType. Dropping the view leaves the
--- materialised drop a genuine no-op, and vice versa.
-DROP VIEW IF EXISTS ${DST}.orders CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS ${DST}.orders CASCADE;
 CREATE MATERIALIZED VIEW ${DST}.orders AS
 WITH bid_tick AS (
   -- The tick that formed the bid: the last one at or before we bid.
