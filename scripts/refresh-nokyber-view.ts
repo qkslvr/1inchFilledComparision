@@ -8,6 +8,10 @@
  *  never reads a half-built relation; it needs the unique index the create
  *  script adds. Run from cron — a few minutes of staleness is immaterial here,
  *  and the underlying dataset only moves as orders resolve. */
+// Imported for its side effect: config.ts loads .env, and cron runs with a bare
+// environment. Without this the job died on every invocation with
+// "DATABASE_URL is not set" and the view silently went stale.
+import '../config.js';
 import { Client } from 'pg';
 
 const url = process.env.DATABASE_URL;
