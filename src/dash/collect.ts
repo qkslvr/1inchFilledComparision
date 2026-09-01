@@ -621,7 +621,17 @@ async function collectSolver(db: Db, activeVenues: readonly string[]) {
     const decided = Number(v?.decided ?? 0);
     return {
       venue,
-      name: venue === 'kalqix' ? 'KalqiX' : venue === 'kyber' ? 'Kyber' : 'Bebop',
+      name:
+        venue === 'kalqix' ? 'KalqiX'
+        : venue === 'kyber' ? 'Kyber'
+        : venue === 'bebop' ? 'Bebop'
+        : 'Hyperliquid',
+      // Hyperliquid cannot settle on Arbitrum: its balances are unreachable from
+      // an Arbitrum call frame, and neither ETH nor BTC bridges there. It is
+      // priced as the replacement cost of inventory the solver already holds,
+      // not as a fill it could source — the card has to say so, or a reader will
+      // take it for a deliverable quote.
+      deliverable: venue !== 'hyperliquid',
       bids,
       wins,
       noBid: Number(v?.no_bid ?? 0),

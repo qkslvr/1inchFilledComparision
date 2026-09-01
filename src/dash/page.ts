@@ -254,7 +254,14 @@ function solverCard(v) {
       + (extra ? '<span class="mut" style="font-weight:400"> ' + extra + '</span>' : '') + '</b></div>';
   }
   return '<div class="card">'
-    + '<h3>' + esc(v.name) + '</h3>'
+    + '<h3>' + esc(v.name)
+    // Hyperliquid prices inventory replacement, not a fill we could settle on
+    // Arbitrum. Left unmarked it reads as a fourth deliverable venue, which is
+    // the one thing a solver would catch immediately.
+    + (v.deliverable === false
+        ? ' <span class="chip short" title="Cannot settle on Arbitrum: priced as inventory replacement, not a sourceable fill">not deliverable</span>'
+        : '')
+    + '</h3>'
     + '<div class="big ' + cls + '">' + pct(v.winRatePct) + '</div>'
     + '<div class="sub">WIN RATE</div>'
     + kv('BIDS', String(v.bids), null)

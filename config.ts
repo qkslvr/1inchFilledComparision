@@ -38,7 +38,7 @@ interface ChainProfile {
   /** Venues that apply to this dataset. PancakeSwap only exists where it is
    *  deployed, so showing its card on Ethereum just renders a permanent
    *  "no orders". */
-  venues?: Array<'kalqix' | 'kyber' | 'bebop' | 'pancake'>;
+  venues?: Array<'kalqix' | 'kyber' | 'bebop' | 'pancake' | 'hyperliquid'>;
   /** Postgres schema, when this dataset must not share the chain default. */
   schemaOverride?: string;
   /** Where orders come from. Fusion reads the 1inch feed; cow reads settled
@@ -698,6 +698,32 @@ export const config = {
     /** a tick using a quote older than this, or for a stale size, is degraded */
     degradedQuoteAgeMs: 5000,
   },
+  hyperliquid: {
+    infoUrl: 'https://api.hyperliquid.xyz/info',
+    /** Their taker fee at tier 0. Roughly twenty times the visible spread on
+     *  these books, so it — not the spread — is what the price has to clear.
+     *  Stable-quoted pairs are discounted ~80%, which we do not model: assuming
+     *  the worse rate keeps the venue from being flattered. */
+    takerFeeBps: 7n,
+    /** our markup, ppm, same as every other venue */
+    feePpm: 250n,
+    /** Arbitrum symbol -> Hyperliquid spot pair. Only USDC-quoted pairs exist,
+     *  so an order whose quote leg is not USDC has no single-hop price here and
+     *  is left unquoted rather than synthesised from two books.
+     *
+     *  ARB is absent deliberately: Hyperliquid lists no ARB spot market at all,
+     *  only a perp, and a perp delivers no tokens. */
+    spotPairs: {
+      ETH: 'UETH/USDC',
+      WETH: 'UETH/USDC',
+      WBTC: 'UBTC/USDC',
+      USDT: 'USDT0/USDC',
+    } as Record<string, string>,
+    /** One cached book per coin serves every order on it. l2Book is weight 2 of
+     *  1200/min, and quoting each tracked order separately would exhaust that. */
+    bookMaxAgeMs: 2_000,
+    timeoutMs: 8_000,
+  },
   kyber: {
     apiBase: 'https://aggregator-api.kyberswap.com',
     chainSlug: profile.kyberChainSlug,
@@ -748,7 +774,7 @@ export interface ResolvedChain {
   rpcUrl: string;
   schemaOverride: string | null;
   orderSource: 'fusion' | 'cow' | 'cow-solver';
-  venues: Array<'kalqix' | 'kyber' | 'bebop' | 'pancake'>;
+  venues: Array<'kalqix' | 'kyber' | 'bebop' | 'pancake' | 'hyperliquid'>;
 }
 
 /** What the dashboard serves.
@@ -769,7 +795,7 @@ export const allChains: ResolvedChain[] = ['cicada'].map((key) => {
     rpcUrl: process.env[p.rpcEnvVar] || p.rpcUrlDefault,
     schemaOverride: p.schemaOverride ?? null,
     orderSource: p.orderSource ?? 'fusion',
-    venues: p.venues ?? ['kalqix', 'kyber', 'bebop'],
+    venues: p.venues ?? ['kalqix', 'kyber', 'bebop', 'hyperliquid'],
   };
 });
 

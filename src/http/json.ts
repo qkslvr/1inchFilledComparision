@@ -84,6 +84,62 @@ export function getJson<T>(
   });
 }
 
+/** POST a JSON body and parse the JSON reply.
+ *
+ *  Hyperliquid exposes its whole read-only surface as one POST to /info,
+ *  discriminated by a `type` field, so a GET-only client cannot reach it at all.
+ *  Same agent, same User-Agent, same status handling as `getJson` — the only
+ *  differences are the method, the Content-Type and writing the body. */
+export function postJson<T>(
+  url: string,
+  body: unknown,
+  timeoutMs = 20_000,
+  headers: Record<string, string> = {}
+): Promise<T> {
+  const u = new URL(url);
+  const payload = Buffer.from(JSON.stringify(body), 'utf8');
+  return new Promise<T>((resolve, reject) => {
+    const req = https.request(
+      {
+        host: u.host,
+        path: u.pathname + u.search,
+        method: 'POST',
+        agent,
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'Content-Length': String(payload.length),
+          'User-Agent': USER_AGENT,
+          ...headers,
+        },
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        if (status < 200 || status >= 300) {
+          res.resume();
+          reject(new HttpStatusError(status));
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as T);
+          } catch (err) {
+            reject(err);
+          }
+        });
+        res.on('error', reject);
+      }
+    );
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`timeout after ${timeoutMs}ms`));
+    });
+    req.end(payload);
+  });
+}
+
 /** GET returning null on any failure, for callers that treat absence as data. */
 export async function getJsonOrNull<T>(url: string, timeoutMs = 20_000): Promise<T | null> {
   try {

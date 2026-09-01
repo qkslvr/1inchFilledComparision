@@ -38,7 +38,7 @@ basis, no seam to explain.
 - Do this **after** tasks 1, 2, 5 and 6 land, so the fresh data is collected under
   the final rules and never needs restating again.
 
-## Task 1 — Fee 5 bps -> 2.5 bps
+## Task 1 — Fee 5 bps -> 2.5 bps  **DONE**
 
 `config.ts`: `kalqixTakerFeeBps` and each venue's `feeBps` to `25n` in tenths, or
 introduce `feeBps` at a finer unit. **Note:** the current field is whole bps as a
@@ -51,7 +51,7 @@ Every score is net of this fee, so it changes surplus, edge and the win verdict.
   slightly, since a smaller fee means a better net price.
 - No backfill: Task 0 discards the 5 bps history.
 
-## Task 2 — Kyber slippage haircut
+## Task 2 — Kyber slippage haircut  **DONE**
 
 Kyber returns an aggregator route quote, which is indicative: the executed
 amount can be worse. Subtract a configurable haircut from its output before
@@ -65,7 +65,7 @@ netting, so the comparison against a real solver is not flattered.
 - Also apply the same mechanism to the new venues where their quotes are
   indicative rather than firm.
 
-## Task 3 — Collapse to one dashboard
+## Task 3 — Collapse to one dashboard  **DONE**
 
 - `allChains` keeps `cicada` only; relabel to `Shadow Resolver`.
 - Remove the `cicadaNoKyber` profile, its materialised view, its refresh cron.
@@ -74,7 +74,7 @@ netting, so the comparison against a real solver is not flattered.
   the routes and tabs go. Reversible by re-adding a key to `allChains`.
 - **Open: Q3.**
 
-## Task 4 — Root URL
+## Task 4 — Root URL  **DONE**
 
 `router.mjs`: `/` proxies to the shadow app instead of serving `landing.html`;
 drop the `/liquidity` route and the `/cicada` special case. Keep `/shadow` as an
@@ -112,7 +112,7 @@ may already be routing through Hashflow. Treating them as independent venues
 would overstate depth on overlapping pairs. Check whether Kyber's route names
 `hashflow-v3` before presenting a best-of-five as five independent sources.
 
-## Task 6 — Hyperliquid venue  **it cannot fill on Arbitrum**
+## Task 6 — Hyperliquid venue  **DONE** (it cannot fill on Arbitrum)
 
 Research is unambiguous, and worse than the question assumed:
 
@@ -151,7 +151,7 @@ Found by the audit agent, ordered by severity. **All must land before Task 0** �
 the wipe is what makes them cheap to fix, since no restatement is needed, but
 fresh data collected under the current code would inherit every one of them.
 
-### Task 9 — `our_score` is never written at resolve time  *(verified in code)*
+### Task 9 **DONE** — `our_score` is never written at resolve time  *(verified in code)*
 
 `recordResolution` (`src/db/db.ts:730`) updates fourteen columns and `our_score`
 is not among them. The only writer is `recordBid` (`db.ts:699`), which stores the
@@ -165,7 +165,7 @@ for `surplus_usd`, still live on the column the headline filters by.
 
 Fix: persist the resolve-time score, and `score_margin_bps` with it.
 
-### Task 10 — a zero-score leg can still win a bundle  *(verified in data)*
+### Task 10 **DONE** — a zero-score leg can still win a bundle  *(verified in data)*
 
 `batchverdict` guards `our_score IS NULL` but treats `'0'` as a legitimate zero
 contribution. `scoreOf` clamps a sub-limit delivery to zero — "not a worse bid,
@@ -177,20 +177,20 @@ Knock-on: the per-venue win rate divides by a denominator that excludes
 `our_score = '0'` while the numerator includes it. **KalqiX reads 8.27%; the
 honest figure is 5.51%.**
 
-### Task 11 — buy orders are never restated at fill size  *(verified in code)*
+### Task 11 **DONE** — buy orders are never restated at fill size  *(verified in code)*
 
 The buy branch of `bidScore` ignores `referenceSell` entirely, while
 `rivalScore` scales. The exact inversion fixed on the sell side, still live on
 the buy side: one order's score is inflated 5.5×. Few rows today, but the
 multiplier is unbounded as the fill fraction falls.
 
-### Task 12 — volume is whole-order, fee is settled-fill
+### Task 12 **DONE** — volume is whole-order, fee is settled-fill
 
 The two cards sit side by side and cannot be reconciled: $244.8M reported
 against $26.7M actually settled. 87% of it comes from 21 resting stablecoin
 orders that filled ~0%. The fee then implies 1.58 bps of stated volume, not 2.5.
 
-### Task 13 — `score_margin_bps` truncates toward zero
+### Task 13 **DONE** — `score_margin_bps` truncates toward zero
 
 Bigint division in `scoreMarginBps`, so any margin under 1 bps becomes exactly
 0 — 112 rows, one of them $34.26 of real edge recorded as zero. Bounded error,

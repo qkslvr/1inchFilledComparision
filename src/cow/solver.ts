@@ -30,6 +30,7 @@ import { kyberBudget, KyberBudgetExhausted } from '../kyber/client.js';
 import { createBebopSource } from '../bebop/source.js';
 import { walkBuyBaseFloat, walkSellBaseFloat } from '../bebop/depth.js';
 import { walkBuyBase, walkSellBase } from '../kalqix/book.js';
+import { fetchSpotBook, loadSpotIndex } from '../hyperliquid/client.js';
 import { parseAuctionSnapshot, type CowAuctionSnapshot } from './competition.js';
 import { fetchSignedOrder, type CowSignedOrder } from './orders.js';
 import { scoreOf, scoreOfBuy, scoreMarginBps, notionalNative, proRataLimit, atFillSize, wouldHaveWon } from './score.js';
@@ -182,7 +183,7 @@ function weiToToken(wei: bigint, decimals: number, symbol: string): bigint | nul
   return null;
 }
 
-export type Venue = 'kalqix' | 'kyber' | 'bebop';
+export type Venue = 'kalqix' | 'kyber' | 'bebop' | 'hyperliquid';
 
 interface VenueQuote {
   /** raw proceeds from the venue, in buyToken atoms */
@@ -247,6 +248,55 @@ async function quoteVenues(t: {
         feePpm: config.kalqixTakerFeePpm,
         outUsd6: null,
       });
+    }
+  }
+
+  // --- Hyperliquid -----------------------------------------------------------
+  // Priced from its spot book the same way KalqiX is, and for the same reason:
+  // a book walk is the only honest answer to "what would this size get".
+  //
+  // Unlike the others, this is not a fill we could settle on Arbitrum — see
+  // src/hyperliquid/client.ts. It is here as the replacement cost of inventory
+  // the solver is assumed to already hold, and the dashboard says so.
+  if (pair && direction) {
+    const hlPair = config.hyperliquid.spotPairs[pair.base.symbol];
+    const quoteIsUsdc = pair.quote.symbol === 'USDC';
+    if (hlPair && quoteIsUsdc) {
+      try {
+        const coin = (await loadSpotIndex(config.hyperliquid.timeoutMs)).get(hlPair);
+        const book = coin
+          ? await fetchSpotBook(coin, {
+              baseDecimals: pair.base.decimals,
+              quoteDecimals: pair.quote.decimals,
+              maxAgeMs: config.hyperliquid.bookMaxAgeMs,
+              timeoutMs: config.hyperliquid.timeoutMs,
+            })
+          : null;
+        if (book) {
+          const walk =
+            direction === 'SELL_BASE'
+              ? walkSellBase(book.bids, order.sellAmount, pair.base.decimals)
+              : walkBuyBase(book.asks, order.sellAmount, pair.base.decimals);
+          // Their taker fee comes off first — at 7 bps it dwarfs the spread, and
+          // omitting it would make this venue win trades it cannot pay for.
+          if (walk.proceeds !== null) {
+            const afterTaker =
+              walk.proceeds - bpsOfCeil(walk.proceeds, config.hyperliquid.takerFeeBps);
+            const fee = ppmOfCeil(afterTaker, config.hyperliquid.feePpm);
+            out.set('hyperliquid', {
+              out: afterTaker,
+              net: afterTaker - fillGas - fee - safety,
+              gasCost: fillGas,
+              fee,
+              gasWei: config.gasUnits * gasPriceWei,
+              feePpm: config.hyperliquid.feePpm,
+              outUsd6: null,
+            });
+          }
+        }
+      } catch (err) {
+        logError(`hyperliquid book failed for ${order.uid.slice(0, 12)}`, err);
+      }
     }
   }
 
