@@ -407,7 +407,7 @@ const profiles: Record<string, ChainProfile> = {
     // chain: both read from the relay so neither can lock the other out.
     bebopChainSlug: 'arbitrum',
     bebopMode: 'stream',
-    venues: ['kalqix', 'kyber', 'bebop'],
+    venues: ['kalqix', 'kyber', 'bebop', 'hyperliquid'],
     nativeTicker: 'ETH_USDC',
     nativeSymbol: 'ETH',
     stableSymbol: 'USDC',
