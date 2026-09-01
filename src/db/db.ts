@@ -709,6 +709,12 @@ export class Db {
     orderHash: string,
     resolvedAtMs: number,
     won: boolean,
+    /** The score as resolve() computed it — restated to the size that actually
+     *  settled. recordBid stores the bid-time, whole-order score, and that was
+     *  the only writer: the restated number was used for surplus and edge and
+     *  then thrown away, leaving every batch verdict to be decided on the
+     *  un-restated one. */
+    ourScore: bigint | null,
     marginBps: number | null,
     bestRivalScore: bigint | null,
     bestRivalSolver: string | null,
@@ -728,14 +734,14 @@ export class Db {
     prices?: { buy: bigint | undefined; sell: bigint | undefined }
   ): void {
     this.enqueue(
-      `UPDATE orders SET resolved_at_ms = ?, won = ?, score_margin_bps = ?,
+      `UPDATE orders SET resolved_at_ms = ?, won = ?, our_score = ?, score_margin_bps = ?,
          best_rival_score = ?, best_rival_solver = ?, rival_count = ?,
          surplus_usd = ?, edge_usd = ?, fee_usd = ?,
          target_bid = ?, target_won = ?, target_score = ?, target_rank = ?,
          beat_target = ?, vs_target_bps = ?, vs_target_usd = ?,
          buy_token_price = ?, sell_token_price = ?
        WHERE order_hash = ?`,
-      [resolvedAtMs, won ? 1 : 0, marginBps, s(bestRivalScore), bestRivalSolver, rivalCount,
+      [resolvedAtMs, won ? 1 : 0, s(ourScore), marginBps, s(bestRivalScore), bestRivalSolver, rivalCount,
        usd.surplus, usd.edge, usd.fee,
        target?.bid ?? null, target?.won ?? null, s(target?.score ?? null), target?.rank ?? null,
        target?.beat ?? null, target?.vsBps ?? null, target?.edgeUsd ?? null,

@@ -107,7 +107,14 @@ export function scoreMarginBps(
   notionalNative: bigint
 ): number | null {
   if (notionalNative <= 0n) return null;
-  return Number(((ourScore - rivalScore) * 10_000n) / notionalNative);
+  // Scale before converting, not after. Bigint division truncates toward zero,
+  // so dividing first collapsed every margin under 1 bps to exactly 0 in both
+  // directions — 112 rows, one of them $34.26 of real edge on a $628k order,
+  // recorded as no edge at all. Carrying four extra digits through the integer
+  // division keeps four decimal places of bps, which is well inside the
+  // precision the scores themselves have.
+  const scaled = ((ourScore - rivalScore) * 100_000_000n) / notionalNative;
+  return Number(scaled) / 10_000;
 }
 
 /** The order's value in native wei, which is what the margin is a fraction of. */

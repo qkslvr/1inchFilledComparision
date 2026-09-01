@@ -67,7 +67,9 @@ test('a rival scoring zero does not explode the margin', () => {
   const notional = 1_000_000n;
   assert.equal(scoreMarginBps(5_000n, 0n, notional), 50);
   // The real row that produced the absurd figure: now ~1% of the trade.
-  assert.equal(scoreMarginBps(253_667_451_959_248n, 410_081_593n, 25_366_745_195_924_800n), 99);
+  // 99.9998, not 99 — the integer division used to truncate the fraction away,
+  // which also erased every margin smaller than a whole bps.
+  assert.equal(scoreMarginBps(253_667_451_959_248n, 410_081_593n, 25_366_745_195_924_800n), 99.9998);
 });
 
 test('a zero notional yields no margin rather than a division blow-up', () => {

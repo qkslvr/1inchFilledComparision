@@ -431,7 +431,11 @@ async function collectSolver(db: Db, activeVenues: readonly string[]) {
                    -- Rows before solution_bids existed are simply undecidable,
                    -- and the rate is stated over what we can decide.
                    count(*) FILTER (WHERE batch_won IS NOT NULL AND our_score <> '0') AS decided,
-                   count(*) FILTER (WHERE batch_won = 1) AS wins,
+                   -- The no-bid filter belongs on both sides. The denominator
+                   -- already excluded them while the numerator counted them, so a
+                   -- venue was credited with wins it never bid on: KalqiX read
+                   -- 8.27% against an honest 5.51%.
+                   count(*) FILTER (WHERE batch_won = 1 AND our_score <> '0') AS wins,
                    count(*) FILTER (WHERE our_score = '0') AS no_bid,
                    -- Wins against a rival that actually offered surplus. Beating
                    -- a rival who delivered exactly the user's limit and nothing
@@ -482,13 +486,27 @@ async function collectSolver(db: Db, activeVenues: readonly string[]) {
                    -- while the trades we actually won ran +19.
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY score_margin_bps)
                      FILTER (WHERE batch_won = 1) AS median_margin_bps,
-                   sum(size_usd) AS volume_usd,
+                   -- Volume at the size that actually SETTLED, matching the fee
+                   -- beside it. Whole-order notional read $244.8M against $26.7M
+                   -- really traded, because 87% of it came from 21 resting
+                   -- stablecoin orders that filled about 0%. The two cards sat
+                   -- side by side and could not be reconciled: the fee then
+                   -- implied 1.58 bps of stated volume rather than our 2.5.
+                   sum(size_usd * (SELECT LEAST(1.0, b.sell_amount::numeric
+                                                 / NULLIF(o2.limit_sell_amount::numeric, 0))
+                                   FROM solution_bids b
+                                   WHERE b.order_hash = o2.order_hash AND b.is_winner = 1
+                                   LIMIT 1)) AS volume_usd,
                    -- The denominator for that fee. Without it $1.6k floats free
                    -- and no one can check it is 5 bps of anything.
-                   sum(size_usd) FILTER (WHERE batch_won = 1) AS volume_won_usd,
+                   sum(size_usd * (SELECT LEAST(1.0, b.sell_amount::numeric
+                                                 / NULLIF(o2.limit_sell_amount::numeric, 0))
+                                   FROM solution_bids b
+                                   WHERE b.order_hash = o2.order_hash AND b.is_winner = 1
+                                   LIMIT 1)) FILTER (WHERE batch_won = 1) AS volume_won_usd,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY size_usd) AS median_size_usd,
                    min(received_at_ms) AS first_ms, max(received_at_ms) AS last_ms
-            FROM orders`),
+            FROM orders o2`),
     db.all(`SELECT sell_symbol, buy_symbol, count(*) AS n FROM orders
             WHERE sell_symbol IS NOT NULL OR buy_symbol IS NOT NULL
             GROUP BY 1, 2`),

@@ -17,7 +17,8 @@
  *    `solution_bids` knows about. The reconstructed set is a subset, which
  *    flatters us. `batch_size` records how much of it we saw.
  *  - A bundle we cannot fully cover is a loss. If any order in it has no score
- *    of ours, we could not have submitted that solution at all.
+ *    of ours — null, or zero, which means we could not clear that user's limit
+ *    — we could not have submitted that solution at all.
  *
  *  The bar is the score CoW itself published for the winning solution, not one
  *  we rebuild from the amounts it delivered. Rebuilding it ran ~3% light on
@@ -67,8 +68,13 @@ bundle AS (
   FROM win_bundle GROUP BY 1, 2
 ),
 ours AS (
+  -- A zero score is not a cheap bid, it is no bid: scoreOf clamps a delivery
+  -- below the user's limit to zero, and a solution containing such a leg is
+  -- invalid rather than merely low-scoring. Treating '0' as a legitimate zero
+  -- contribution let 15 bundles be won entirely by their sibling leg, every one
+  -- of them with our_bid_out at or under the limit we were supposed to beat.
   SELECT w.auction, w.winner,
-         CASE WHEN bool_and(o.our_score IS NOT NULL)
+         CASE WHEN bool_and(o.our_score IS NOT NULL AND o.our_score <> '0')
               THEN sum(COALESCE(NULLIF(o.our_score, ''), '0')::numeric) END AS total
   FROM win_bundle w
   JOIN orders o ON o.order_hash = w.order_hash

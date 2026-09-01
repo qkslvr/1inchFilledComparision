@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { atFillSize, proRataLimit, scoreOf } from '../src/cow/score.js';
+import { atFillSize, proRataLimit, scoreMarginBps, scoreOf } from '../src/cow/score.js';
 
 /** A real Arbitrum order that inverted the dashboard.
  *
@@ -61,4 +61,18 @@ test('a fully filled order is unaffected by any of this', () => {
 test('a zero-size offer cannot be restated rather than dividing by zero', () => {
   assert.equal(atFillSize(RIVAL_BUY, 0n, FILLED_SELL), null);
   assert.equal(proRataLimit(LIMIT_BUY, FILLED_SELL, 0n), LIMIT_BUY);
+});
+
+test('a margin under one bps is not rounded away', () => {
+  // Bigint division truncates toward zero, so computing bps by dividing first
+  // collapsed every sub-bps margin to exactly 0 — including $34.26 of real edge
+  // on a $628k order. The scores keep far more precision than that.
+  const notional = 10n ** 18n;
+  const half = scoreMarginBps(notional / 20_000n, 0n, notional); // 0.5 bps
+  assert.ok(half !== null && half > 0, 'half a bps must not read as zero');
+  assert.ok(Math.abs(half! - 0.5) < 1e-6, `expected ~0.5, got ${half}`);
+
+  // And it must stay signed in both directions.
+  const negative = scoreMarginBps(0n, notional / 20_000n, notional);
+  assert.ok(negative !== null && negative < 0, 'a small loss must not read as zero');
 });

@@ -392,7 +392,11 @@ function bidScore(
   t: Tracked,
   q: VenueQuote,
   prices: Map<string, bigint>,
-  referenceSell?: bigint
+  referenceSell?: bigint,
+  /** The settled BUY amount. A buy order is denominated in what the user wanted
+   *  to receive, so that — not the sell side — is the size a partial fill has to
+   *  be restated at, which is the reference rivalScore already uses. */
+  referenceBuy?: bigint
 ): bigint | null {
   if (t.order.kind === 'sell') {
     // On a partially fillable order, compare at the size that settled rather
@@ -427,8 +431,23 @@ function bidScore(
   if (gasInSell === null) return null;
   const fee = ppmOfCeil(requiredIn, q.feePpm);
   const safety = bpsOfCeil(t.order.sellAmount, config.safetyMarginBps);
+  const spend = requiredIn + gasInSell + fee + safety;
+
+  // The same restatement the sell side gets. Without it our spend is priced for
+  // the whole order while the limit it is compared against is the whole limit,
+  // and rivalScore has already scaled to the settled size — so a buy order
+  // filling 18% scored us 5.5x too high against a correctly scaled rival.
+  if (referenceBuy !== undefined && referenceBuy < t.order.buyAmount) {
+    const spentAtRef = atFillSize(spend, t.order.buyAmount, referenceBuy);
+    if (spentAtRef === null) return null;
+    return scoreOfBuy({
+      spentSellAmount: spentAtRef,
+      limitSellAmount: proRataLimit(t.order.sellAmount, referenceBuy, t.order.buyAmount),
+      sellTokenPrice: prices.get(t.order.sellToken),
+    });
+  }
   return scoreOfBuy({
-    spentSellAmount: requiredIn + gasInSell + fee + safety,
+    spentSellAmount: spend,
     limitSellAmount: t.order.sellAmount,
     sellTokenPrice: prices.get(t.order.sellToken),
   });
@@ -605,10 +624,14 @@ async function resolve(
     t.order.partiallyFillable && settledSellAmount !== undefined && settledSellAmount > 0n
       ? settledSellAmount
       : undefined;
+  // A buy order is denominated in what the user receives, so its partial fill is
+  // measured on the buy side.
+  const referenceBuy =
+    t.order.partiallyFillable && settledBuyAmount > 0n ? settledBuyAmount : undefined;
   let ourScore: bigint | null = null;
   let best: { venue: Venue; q: VenueQuote } | null = null;
   for (const [venue, q] of bidQuotes) {
-    const sc = bidScore(t, q, prices, referenceSell);
+    const sc = bidScore(t, q, prices, referenceSell, referenceBuy);
     if (sc === null) continue;
     if (ourScore === null || sc > ourScore) {
       ourScore = sc;
@@ -741,7 +764,7 @@ async function resolve(
       ? sizeUsdWhole * fillFraction * (Number(best.q.feePpm) / 1_000_000)
       : null;
   db.recordResolution(
-    t.order.uid, now, won, margin, bestRivalScore, bestRivalSolver, proposals.length,
+    t.order.uid, now, won, ourScore, margin, bestRivalScore, bestRivalSolver, proposals.length,
     {
       surplus: toUsd(ourScore),
       edge: ourScore !== null && bestRivalScore !== null ? toUsd(ourScore - bestRivalScore) : null,
