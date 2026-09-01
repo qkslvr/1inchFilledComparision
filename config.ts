@@ -346,7 +346,7 @@ const profiles: Record<string, ChainProfile> = {
   },
   cicada: {
     chainId: 42161,
-    label: 'Cicada — Arbitrum solver',
+    label: 'Shadow Resolver',
     schemaOverride: 'cicada_42161',
     orderSource: 'cow-solver',
     targetSolver: '0x4cdaf5df3afe11f1726b8975a925245ad14e9f3b',
@@ -421,18 +421,6 @@ const profiles: Record<string, ChainProfile> = {
 
   },
 };
-// The same flow, asked without Kyber. There is no collector behind this and no
-// second pass over the APIs: scripts/create-nokyber-view.ts builds a schema
-// whose `orders` recomputes the bid as the better of KalqiX and Bebop, and
-// whose other tables pass straight through, so every dashboard query reads it
-// unchanged through search_path. Derived from cicada so the two cannot drift.
-profiles.cicadaNoKyber = {
-  ...profiles.cicada!,
-  label: 'Cicada — KalqiX + Bebop',
-  schemaOverride: 'cicada_nokyber_42161',
-  venues: ['kalqix', 'bebop'],
-};
-
 profiles.eth = profiles.ethereum!;
 profiles.bnb = profiles.bsc!;
 profiles.cowswapresolver = profiles.cowswapResolver!;
@@ -770,7 +758,7 @@ export interface ResolvedChain {
  *  some venue have paid more, after the fact — that the solver subsumes by
  *  asking whether we would actually have won. Their profiles and their data are
  *  kept; add a key back here to serve one again. */
-export const allChains: ResolvedChain[] = ['cowswapSolver', 'cicada', 'cicadaNoKyber'].map((key) => {
+export const allChains: ResolvedChain[] = ['cicada'].map((key) => {
   const p = profiles[key]!;
   return {
     key,

@@ -668,7 +668,9 @@ async function refresh() {
 
     lastChains = d.chains;
     setSubtitle();
-    document.getElementById('tabs').style.display = window.__DATASET__ ? 'none' : '';
+    // One dataset needs no tab bar — a lone tab is chrome that says nothing.
+    document.getElementById('tabs').style.display =
+      window.__DATASET__ || d.chains.length < 2 ? 'none' : '';
     document.getElementById('tabs').innerHTML = d.chains.map(c =>
       '<button class="tab' + (c.key === activeChain ? ' active' : '') + '" data-chain="' + esc(c.key) + '" onclick="setChain(\\'' + esc(c.key) + '\\')">'
       + '<span class="dot' + (c.healthy ? '' : ' bad') + '"></span>' + esc(c.label)

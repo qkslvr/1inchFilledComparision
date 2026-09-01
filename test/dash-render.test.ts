@@ -45,7 +45,7 @@ function evalPage(): Record<string, Function> {
 /** A dataset with nothing in it — every aggregate null, no rows. The empty case
  *  is the one that breaks, because it is the one nobody looks at. */
 const emptyChain = {
-  key: 'cicada', label: 'Cicada', chainId: 42161, orderSource: 'cow-solver',
+  key: 'cicada', label: 'Shadow Resolver', chainId: 42161, orderSource: 'cow-solver',
   observedHours: 0, ordersSeen: 0, healthy: false,
   venues: [], funnel: { seen: 0, hedgeable: 0, hedgeableUsd: 0, priced: 0, won: 0, wonUsd: 0 },
   live: [], decided: [],
