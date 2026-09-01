@@ -145,6 +145,63 @@ from stored inputs, fee against settled size, sign agreement between
 `score_margin_bps` and `edge_usd`, buy-order handling, and `quote_holds`
 slippage. Findings will be folded in as their own tasks.
 
+## Tasks from the correctness audit
+
+Found by the audit agent, ordered by severity. **All must land before Task 0** —
+the wipe is what makes them cheap to fix, since no restatement is needed, but
+fresh data collected under the current code would inherit every one of them.
+
+### Task 9 — `our_score` is never written at resolve time  *(verified in code)*
+
+`recordResolution` (`src/db/db.ts:730`) updates fourteen columns and `our_score`
+is not among them. The only writer is `recordBid` (`db.ts:699`), which stores the
+**bid-time, whole-order** score. `resolve()` computes a restated score at the
+settled fill size and uses it for `won`, `surplus_usd` and `edge_usd` — then
+throws it away.
+
+`recomputeBatchVerdicts` sums `our_score` against the published bar, so **every
+win verdict is decided on the un-restated number** — the same bug that was fixed
+for `surplus_usd`, still live on the column the headline filters by.
+
+Fix: persist the resolve-time score, and `score_margin_bps` with it.
+
+### Task 10 — a zero-score leg can still win a bundle  *(verified in data)*
+
+`batchverdict` guards `our_score IS NULL` but treats `'0'` as a legitimate zero
+contribution. `scoreOf` clamps a sub-limit delivery to zero — "not a worse bid,
+it is not a bid" — so a bundle containing one is not a solution we could have
+submitted. 15 wins are carried entirely by a sibling leg, all with
+`our_bid_out <= limit_buy_amount`.
+
+Knock-on: the per-venue win rate divides by a denominator that excludes
+`our_score = '0'` while the numerator includes it. **KalqiX reads 8.27%; the
+honest figure is 5.51%.**
+
+### Task 11 — buy orders are never restated at fill size  *(verified in code)*
+
+The buy branch of `bidScore` ignores `referenceSell` entirely, while
+`rivalScore` scales. The exact inversion fixed on the sell side, still live on
+the buy side: one order's score is inflated 5.5×. Few rows today, but the
+multiplier is unbounded as the fill fraction falls.
+
+### Task 12 — volume is whole-order, fee is settled-fill
+
+The two cards sit side by side and cannot be reconciled: $244.8M reported
+against $26.7M actually settled. 87% of it comes from 21 resting stablecoin
+orders that filled ~0%. The fee then implies 1.58 bps of stated volume, not 2.5.
+
+### Task 13 — `score_margin_bps` truncates toward zero
+
+Bigint division in `scoreMarginBps`, so any margin under 1 bps becomes exactly
+0 — 112 rows, one of them $34.26 of real edge recorded as zero. Bounded error,
+one-directional bias, and it feeds the median-edge card.
+
+### Task 14 — headline concentration
+
+Not a calculation error, but 52% of surplus rests on 38 of 225 rows in two
+token families: Aave receipt tokens (the family already known to produce
+nonsense valuations) and ODYS. Worth a filter or a caveat before pitching.
+
 ## Task 8 — Post-change verification
 
 Re-audit end to end on live data once 1–6 land: one order traced from arrival
