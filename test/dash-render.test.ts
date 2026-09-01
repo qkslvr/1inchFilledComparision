@@ -134,7 +134,7 @@ test('a populated dataset renders, including the target-solver strip', () => {
     ...emptyChain,
     solver: {
       ...emptyChain.solver,
-      target: { theyBid: 9, theyWon: 2, theyLost: 7, weBeat: 4, weBeatOnTheirLosses: 3, beatPct: 44.4, medianVsBps: 12, edgeUsd: 41.2 },
+      target: { theyBid: 9, theyWon: 2, theyLost: 7, weBeat: 4, weWouldWinTheirLosses: 1, beatPct: 44.4, medianVsBps: 12, edgeUsd: 41.2 },
       overview: { ...emptyChain.solver.overview, auctionsSeen: 5915, resolved: 287, bidsWon: 42, decided: 260, volumeUsd: 216687772, volumeWonUsd: 3284151, medianSizeUsd: 10005, heldPct: 78.6, heldWonPct: 72.4, btcPct: 4.6 },
       rows: [{
         time: '10:00:00', tsMs: 1, pair: 'ETH_USDC', sizeUsd: 1000, venue: 'kyber', won: true,
@@ -152,6 +152,11 @@ test('a populated dataset renders, including the target-solver strip', () => {
   // them has to be on the card too — otherwise the fee has no visible base.
   assert.ok(html.includes('VOLUME WON'), 'the won-volume denominator is missing');
   assert.ok(html.includes('VS TARGET SOLVER'), 'the target strip is missing');
+  // The card must count auctions our bid would have WON for them, not ones we
+  // merely out-priced them on: on two of three we out-priced them we still
+  // ranked 11th and 2nd, so a third solver took the auction regardless.
+  assert.ok(html.includes('WE&rsquo;D HAVE WON IT'), 'the win-for-them card is missing');
+  assert.ok(html.includes('of the 7 they lost'), 'the denominator should be their losses');
   assert.ok(html.includes('ETH_USDC'), 'the trade row did not render');
 });
 

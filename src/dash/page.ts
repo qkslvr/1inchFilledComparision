@@ -360,7 +360,8 @@ function solverSection(c) {
       + ov('THEY WON', String(t.theyWon), t.theyBid > 0 ? pct(100 * t.theyWon / t.theyBid) : null)
       + ov('THEY LOST', String(t.theyLost), null)
       + ov('WE BEAT THEIR PRICE', String(t.weBeat), pct(t.beatPct))
-      + ov('&hellip;ON AUCTIONS THEY LOST', String(t.weBeatOnTheirLosses), 'would have flipped')
+      + ov('WE&rsquo;D HAVE WON IT', String(t.weWouldWinTheirLosses),
+           t.theyLost > 0 ? 'of the ' + t.theyLost + ' they lost' : 'they have lost none')
       + ov('MEDIAN VS THEM', bps(t.medianVsBps), 'of trade value')
       + ov('EDGE WHERE WE BEAT', usdShort(t.edgeUsd), null)
       + '</div>';

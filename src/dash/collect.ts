@@ -507,7 +507,13 @@ async function collectSolver(db: Db, activeVenues: readonly string[]) {
                    count(*) FILTER (WHERE target_won) AS they_won,
                    count(*) FILTER (WHERE beat_target) AS we_beat,
                    count(*) FILTER (WHERE target_bid AND NOT target_won) AS they_lost,
-                   count(*) FILTER (WHERE target_bid AND NOT target_won AND beat_target) AS we_beat_on_their_losses,
+                   -- Auctions they lost that OUR bid would actually have won.
+                   -- Beating their price is not the same claim: on two of the
+                   -- three we out-priced them we still ranked 11th and 2nd, so a
+                   -- third solver took the auction and nothing would have
+                   -- flipped. batch_won is the only test that means "we win it".
+                   count(*) FILTER (WHERE target_bid AND NOT target_won AND batch_won = 1)
+                     AS we_would_win_their_losses,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY vs_target_bps) AS median_vs_bps,
                    sum(edge_usd) FILTER (WHERE beat_target) AS edge_usd
             FROM orders WHERE resolved_at_ms IS NOT NULL`),
@@ -628,7 +634,7 @@ async function collectSolver(db: Db, activeVenues: readonly string[]) {
           weBeat: Number(target?.we_beat ?? 0),
           // The headline for a pitch: auctions they lost where our price would
           // have been better than the one they submitted.
-          weBeatOnTheirLosses: Number(target?.we_beat_on_their_losses ?? 0),
+          weWouldWinTheirLosses: Number(target?.we_would_win_their_losses ?? 0),
           beatPct:
             Number(target?.they_bid ?? 0) > 0
               ? (100 * Number(target?.we_beat ?? 0)) / Number(target!.they_bid)
