@@ -671,14 +671,18 @@ async function resolve(
   // checked from the record.
   const targetAddr = config.cow.targetSolver;
   let target:
-    | { bid: boolean; won: boolean; score: bigint | null; rank: number | null; beat: boolean | null; vsBps: number | null }
+    | { bid: boolean; won: boolean; score: bigint | null; rank: number | null;
+        beat: boolean | null; vsBps: number | null; edgeUsd: number | null }
     | undefined;
   if (targetAddr) {
     const theirs = proposals.find((p) => p.solver === targetAddr);
     if (!theirs) {
-      target = { bid: false, won: false, score: null, rank: null, beat: null, vsBps: null };
+      target = { bid: false, won: false, score: null, rank: null, beat: null, vsBps: null, edgeUsd: null };
     } else {
-      const theirScore = rivalScore(t, theirs, prices);
+      // referenceSell, as every other rival on the ladder gets. Without it a
+      // partial fill is judged against the whole order's limit, which scores the
+      // target at zero and hands us a win we did not earn.
+      const theirScore = rivalScore(t, theirs, prices, referenceSell);
       target = {
         bid: true,
         won: theirs.isWinner,
@@ -689,6 +693,8 @@ async function resolve(
           ourScore !== null && theirScore !== null && notional !== null
             ? scoreMarginBps(ourScore, theirScore, notional)
             : null,
+        // Filled in below, once the native-to-USD rate is in scope.
+        edgeUsd: null,
       };
     }
   }
@@ -698,6 +704,14 @@ async function resolve(
   const ethUsd6 = nativeUsd6();
   const toUsd = (wei: bigint | null): number | null =>
     wei === null || ethUsd6 === undefined ? null : toFloat(wei, 18) * toFloat(ethUsd6, 6);
+
+  // How far ahead of the TARGET we are, in money. The dashboard was reporting
+  // edge_usd here, which measures us against the best rival in the auction —
+  // so a card headed "edge where we beat [the target]" summed a different
+  // comparison entirely and came out negative on auctions we had won on price.
+  if (target && target.score !== null && ourScore !== null) {
+    target.edgeUsd = toUsd(ourScore - target.score);
+  }
 
   // Our markup, charged on what actually settled.
   //

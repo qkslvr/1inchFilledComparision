@@ -721,6 +721,7 @@ export class Db {
       rank: number | null;
       beat: boolean | null;
       vsBps: number | null;
+      edgeUsd: number | null;
     },
     /** The auction's own prices, so a score can be recomputed later without
      *  inverting the one we happened to store. */
@@ -731,13 +732,13 @@ export class Db {
          best_rival_score = ?, best_rival_solver = ?, rival_count = ?,
          surplus_usd = ?, edge_usd = ?, fee_usd = ?,
          target_bid = ?, target_won = ?, target_score = ?, target_rank = ?,
-         beat_target = ?, vs_target_bps = ?,
+         beat_target = ?, vs_target_bps = ?, vs_target_usd = ?,
          buy_token_price = ?, sell_token_price = ?
        WHERE order_hash = ?`,
       [resolvedAtMs, won ? 1 : 0, marginBps, s(bestRivalScore), bestRivalSolver, rivalCount,
        usd.surplus, usd.edge, usd.fee,
        target?.bid ?? null, target?.won ?? null, s(target?.score ?? null), target?.rank ?? null,
-       target?.beat ?? null, target?.vsBps ?? null,
+       target?.beat ?? null, target?.vsBps ?? null, target?.edgeUsd ?? null,
        s(prices?.buy ?? null), s(prices?.sell ?? null),
        orderHash]
     );

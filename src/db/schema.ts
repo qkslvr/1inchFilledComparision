@@ -96,6 +96,10 @@ export const MIGRATIONS: string[] = [
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS target_rank INTEGER`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS beat_target BOOLEAN`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS vs_target_bps DOUBLE PRECISION`,
+  // The same gap in money. The target strip was summing edge_usd, which measures
+  // us against the best rival in the auction rather than against the target, so
+  // "edge where we beat them" came out negative on auctions we had won on price.
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS vs_target_usd DOUBLE PRECISION`,
   // Where our bid would have slotted into the field, not just whether it beat
   // the top of it. "Third of eight" is a different claim from "did not win".
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS our_rank INTEGER`,
@@ -241,6 +245,7 @@ CREATE TABLE IF NOT EXISTS orders (
   target_rank        INTEGER,
   beat_target        BOOLEAN,
   vs_target_bps      DOUBLE PRECISION,
+  vs_target_usd      DOUBLE PRECISION,
   our_rank           INTEGER,
   buy_token_price    TEXT,
   sell_token_price   TEXT,

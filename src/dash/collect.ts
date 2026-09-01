@@ -515,7 +515,11 @@ async function collectSolver(db: Db, activeVenues: readonly string[]) {
                    count(*) FILTER (WHERE target_bid AND NOT target_won AND batch_won = 1)
                      AS we_would_win_their_losses,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY vs_target_bps) AS median_vs_bps,
-                   sum(edge_usd) FILTER (WHERE beat_target) AS edge_usd
+                   -- vs_target_usd, not edge_usd: the latter measures us against
+                   -- the best rival in the auction, so this card summed a
+                   -- different comparison than its own label and read negative
+                   -- on auctions we had won on price.
+                   sum(vs_target_usd) FILTER (WHERE beat_target) AS edge_usd
             FROM orders WHERE resolved_at_ms IS NOT NULL`),
     // One row per auction — the batch — rather than per order. Arbitrum settles
     // one order in ~90% of batches and two in the rest, so this mostly reframes
