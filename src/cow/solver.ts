@@ -194,7 +194,7 @@ interface VenueQuote {
   /** Gas in native wei, kept unconverted. A buy order needs it in sellToken,
    *  a sell order in buyToken, and converting early loses that choice. */
   gasWei: bigint;
-  feeBps: bigint;
+  feePpm: bigint;
   /** the venue's own USD valuation of `out`, 6dp, where it offers one. It is
    *  the only price available for a token outside our pair config. */
   outUsd6: bigint | null;
@@ -237,14 +237,14 @@ async function quoteVenues(t: {
         ? walkSellBase(book.bids, order.sellAmount, pair.base.decimals)
         : walkBuyBase(book.asks, order.sellAmount, pair.base.decimals);
     if (walk.proceeds !== null) {
-      const fee = ppmOfCeil(walk.proceeds, config.kalqixTakerFeeBps * 100n);
+      const fee = ppmOfCeil(walk.proceeds, config.kalqixTakerFeePpm);
       out.set('kalqix', {
         out: walk.proceeds,
         net: walk.proceeds - fillGas - fee - safety,
         gasCost: fillGas,
         fee,
         gasWei: config.gasUnits * gasPriceWei,
-        feeBps: config.kalqixTakerFeeBps,
+        feePpm: config.kalqixTakerFeePpm,
         outUsd6: null,
       });
     }
@@ -277,14 +277,20 @@ async function quoteVenues(t: {
       weiToTokenViaUsd(config.gasUnits * gasPriceWei, nativeUsd6(), q.amountOut, q.amountOutUsd6) ||
       0n;
     if (venueGas !== null) {
-      const fee = bpsOfCeil(q.amountOut, config.kyber.feeBps);
+      // Kyber's is a route quote, not a firm one, so haircut it before anything
+      // else: the amount that actually executes can be worse, and every other
+      // venue here quotes something it will honour. Taken off the output rather
+      // than added to the fee, because slippage is a cost to the user while the
+      // fee is our revenue — conflating them would misreport both.
+      const slipped = q.amountOut - bpsOfCeil(q.amountOut, config.kyber.slippageBps);
+      const fee = ppmOfCeil(slipped, config.kyber.feePpm);
       out.set('kyber', {
-        out: q.amountOut,
-        net: q.amountOut - fillGasHere - venueGas - fee - safety,
+        out: slipped,
+        net: slipped - fillGasHere - venueGas - fee - safety,
         gasCost: fillGasHere + venueGas,
         fee,
         gasWei: (config.gasUnits + q.gasUnits) * gasPriceWei,
-        feeBps: config.kyber.feeBps,
+        feePpm: config.kyber.feePpm,
         outUsd6: q.amountOutUsd6,
       });
     }
@@ -308,14 +314,14 @@ async function quoteVenues(t: {
           10n ** BigInt(Math.max(0, buyDecimals - 12));
         const venueGas = weiToToken(config.bebop.gasUnits * gasPriceWei, buyDecimals, buySymbol);
         if (venueGas !== null) {
-          const fee = bpsOfCeil(amount, config.bebop.feeBps);
+          const fee = ppmOfCeil(amount, config.bebop.feePpm);
           out.set('bebop', {
             out: amount,
             net: amount - fillGas - venueGas - fee - safety,
             gasCost: fillGas + venueGas,
             fee,
             gasWei: (config.gasUnits + config.bebop.gasUnits) * gasPriceWei,
-            feeBps: config.bebop.feeBps,
+            feePpm: config.bebop.feePpm,
             outUsd6: null,
           });
         }
@@ -419,7 +425,7 @@ function bidScore(
           t.order.sellAmount) /
         (q.out === 0n ? 1n : q.out);
   if (gasInSell === null) return null;
-  const fee = bpsOfCeil(requiredIn, q.feeBps);
+  const fee = ppmOfCeil(requiredIn, q.feePpm);
   const safety = bpsOfCeil(t.order.sellAmount, config.safetyMarginBps);
   return scoreOfBuy({
     spentSellAmount: requiredIn + gasInSell + fee + safety,
@@ -441,7 +447,7 @@ function shortfallBps(t: Tracked, q: VenueQuote): number | null {
   }
   if (q.out <= 0n || t.order.sellAmount <= 0n) return null;
   const requiredIn = (t.order.sellAmount * t.order.buyAmount + q.out - 1n) / q.out;
-  const spend = requiredIn + bpsOfCeil(requiredIn, q.feeBps) + bpsOfCeil(t.order.sellAmount, config.safetyMarginBps);
+  const spend = requiredIn + ppmOfCeil(requiredIn, q.feePpm) + bpsOfCeil(t.order.sellAmount, config.safetyMarginBps);
   return Number(((spend - t.order.sellAmount) * 10_000n) / t.order.sellAmount);
 }
 
@@ -732,7 +738,7 @@ async function resolve(
       : 1;
   const feeUsd =
     best && sizeUsdWhole !== null
-      ? sizeUsdWhole * fillFraction * (Number(best.q.feeBps) / 10_000)
+      ? sizeUsdWhole * fillFraction * (Number(best.q.feePpm) / 1_000_000)
       : null;
   db.recordResolution(
     t.order.uid, now, won, margin, bestRivalScore, bestRivalSolver, proposals.length,

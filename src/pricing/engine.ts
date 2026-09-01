@@ -79,7 +79,7 @@ export class PricingEngine {
     private readonly skewMs: () => number,
     private readonly runId: () => number,
     /** KalqiX taker fee in ppm; config default or the account's live effective rate. */
-    private readonly takerFeePpm: bigint = config.kalqixTakerFeeBps * 100n,
+    private readonly takerFeePpm: bigint = config.kalqixTakerFeePpm,
     private readonly kyber: KyberQuoter | null = null,
     private readonly bebop: BebopSource | null = null,
     private readonly pancake: PancakeQuoter | null = null
@@ -327,7 +327,7 @@ export class PricingEngine {
         kyberQuoteAgeMs > config.kyber.degradedQuoteAgeMs || quote.amountIn !== o.remainingMaker;
       const swapGasWei = quote.gasUnits * gasPriceWei;
       kyberGasCost = this.weiToTakerAsset(swapGasWei, o);
-      kyberFee = bpsOfCeil(kyberOut, config.kyber.feeBps);
+      kyberFee = ppmOfCeil(kyberOut, config.kyber.feePpm);
       if (kyberGasCost !== null && gasCostRaw !== null) {
         edgeKyber =
           kyberOut -
@@ -365,7 +365,7 @@ export class PricingEngine {
         bebopDegraded = bebopAgeMs > config.bebop.degradedAgeMs;
         if (outHuman !== null && gasCostRaw !== null) {
           bebopOut = humanToUnits(outHuman, takerDec);
-          bebopFee = bpsOfCeil(bebopOut, config.bebop.feeBps);
+          bebopFee = ppmOfCeil(bebopOut, config.bebop.feePpm);
           const settleGas = this.weiToTakerAsset(config.bebop.gasUnits * gasPriceWei, o);
           if (settleGas !== null) {
             bebopGasCost = settleGas;
@@ -450,7 +450,7 @@ export class PricingEngine {
       kyberQuoteAgeMs > config.kyber.degradedQuoteAgeMs || quote.amountIn !== o.remainingMaker;
     const fillGas = weiToTakerViaQuote(config.gasUnits * gasPriceWei);
     const swapGas = weiToTakerViaQuote(quote.gasUnits * gasPriceWei);
-    const kyberFee = bpsOfCeil(quote.amountOut, config.kyber.feeBps);
+    const kyberFee = ppmOfCeil(quote.amountOut, config.kyber.feePpm);
     const edgeKyber =
       quote.amountOut -
       auctionCost -
@@ -486,7 +486,7 @@ export class PricingEngine {
         bebopDegraded = bebopAgeMs > config.bebop.degradedAgeMs;
         if (outHuman !== null) {
           bebopOut = humanToUnits(outHuman, takerDec);
-          bebopFee = bpsOfCeil(bebopOut, config.bebop.feeBps);
+          bebopFee = ppmOfCeil(bebopOut, config.bebop.feePpm);
           bebopGasCost = weiToTakerViaQuote(config.bebop.gasUnits * gasPriceWei);
           edgeBebop =
             bebopOut -
@@ -574,7 +574,7 @@ export class PricingEngine {
     if (swapGas === null || gasCostRaw === null) {
       return { ...empty, pancakeOut: quote.amountOut, pancakeAgeMs: ageMs, pancakeDegraded: degraded, pancakeTier: quote.fee };
     }
-    const fee = bpsOfCeil(quote.amountOut, config.pancake.feeBps);
+    const fee = ppmOfCeil(quote.amountOut, config.pancake.feePpm);
     return {
       pancakeOut: quote.amountOut,
       pancakeAgeMs: ageMs,

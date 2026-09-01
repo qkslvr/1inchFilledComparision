@@ -177,7 +177,7 @@ async function evaluateInner(
         : walkBuyBase(book.asks, trade.sellAmount, pair.base.decimals);
     hedgeProceeds = walk.proceeds;
     insufficientDepth = walk.proceeds === null;
-    if (hedgeProceeds !== null) feeCost = ppmOfCeil(hedgeProceeds, config.kalqixTakerFeeBps * 100n);
+    if (hedgeProceeds !== null) feeCost = ppmOfCeil(hedgeProceeds, config.kalqixTakerFeePpm);
   }
 
   // --- Kyber ---
@@ -193,7 +193,7 @@ async function evaluateInner(
     });
     kyberOut = q.amountOut;
     kyberGasCost = weiToBuyToken(q.gasUnits * gasPriceWei, buyDecimals, buySymbol);
-    kyberFee = bpsOfCeil(kyberOut, config.kyber.feeBps);
+    kyberFee = ppmOfCeil(kyberOut, config.kyber.feePpm);
     if (kyberGasCost !== null) {
       edgeKyber = kyberOut - cost - gasCostRaw - kyberGasCost - kyberFee - bpsOfCeil(cost, config.safetyMarginBps);
     }
@@ -216,7 +216,7 @@ async function evaluateInner(
       const out = found.aIsBase ? walkSellBaseFloat(found.book.bids, human) : walkBuyBaseFloat(found.book.asks, human);
       if (out !== null && out > 0) {
         bebopOut = BigInt(Math.floor(out * 10 ** Math.min(buyDecimals, 12))) * 10n ** BigInt(Math.max(0, buyDecimals - 12));
-        bebopFee = bpsOfCeil(bebopOut, config.bebop.feeBps);
+        bebopFee = ppmOfCeil(bebopOut, config.bebop.feePpm);
         bebopGasCost = weiToBuyToken(config.bebop.gasUnits * gasPriceWei, buyDecimals, buySymbol);
         if (bebopGasCost !== null) {
           edgeBebop = bebopOut - cost - gasCostRaw - bebopGasCost - bebopFee - bpsOfCeil(cost, config.safetyMarginBps);

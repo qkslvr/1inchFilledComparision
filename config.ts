@@ -485,7 +485,10 @@ export const config = {
   gasPollIntervalMs: 30_000,
   /** Gas units for a hypothetical fill tx, incl. wrap/unwrap allowance for native-ETH takers. */
   gasUnits: 300_000n,
-  kalqixTakerFeeBps: 5n,
+  // Parts per million, not bps: our fee is 2.5 bps and whole bps cannot express
+  // it. Three call sites already multiplied this by 100 to reach ppm, so ppm was
+  // the real unit all along.
+  kalqixTakerFeePpm: 250n,
   /** Set to zero deliberately: the solver simulation prices the trade as it
    *  would actually be filled, with no cushion held back. A margin here is a
    *  commercial choice, not a cost, and folding it in made every bid look worse
@@ -519,8 +522,8 @@ export const config = {
     wsBase: 'wss://api.bebop.xyz/pmm',
     restBase: 'https://api.bebop.xyz/pmm',
     chainSlug: profile.bebopChainSlug ?? profile.kyberChainSlug,
-    /** our assumed markup on a Bebop-hedged fill */
-    feeBps: 5n,
+    /** our markup on a Bebop-hedged fill, ppm */
+    feePpm: 250n,
     /** settlement tx gas for an RFQ self-execution fill */
     gasUnits: 250_000n,
     /** a tick using stream data older than this is bebop-degraded */
@@ -553,7 +556,8 @@ export const config = {
     quoteOnResolve: profile.quoteOnResolve === true,
     /** quotes need a from/receiver to be returned; nothing is signed or sent */
     quoteFrom: '0x0000000000000000000000000000000000000001',
-    feeBps: 5n,
+    /** our markup, ppm */
+    feePpm: 250n,
     quoteIntervalMs: 2000,
     quoteTimeoutMs: 5000,
     degradedQuoteAgeMs: 5000,
@@ -701,8 +705,8 @@ export const config = {
     solverExpiryGraceMs: 90_000,
   },
   pancake: {
-    /** our assumed markup on a PancakeSwap-hedged fill, same basis as the others */
-    feeBps: 5n,
+    /** our markup on a PancakeSwap-hedged fill, ppm */
+    feePpm: 250n,
     /** a tick using a quote older than this, or for a stale size, is degraded */
     degradedQuoteAgeMs: 5000,
   },
@@ -710,8 +714,14 @@ export const config = {
     apiBase: 'https://aggregator-api.kyberswap.com',
     chainSlug: profile.kyberChainSlug,
     clientId: 'shadow-resolver',
-    /** our assumed markup on a Kyber-hedged fill */
-    feeBps: 5n,
+    /** our markup on a Kyber-hedged fill, ppm */
+    feePpm: 250n,
+    /** Kyber returns an aggregator ROUTE quote, which is indicative: the amount
+     *  actually executed can be worse. Every other venue here quotes something
+     *  firm, so without a haircut Kyber is flattered against them and against a
+     *  real solver. Applied to its output before gas and fee, like slippage
+     *  really is — not folded into the fee, which is our revenue. */
+    slippageBps: 10n,
     /** fallback swap-leg gas units when the quote carries no estimate */
     fallbackGasUnits: 400_000n,
     quoteIntervalMs: 2000,

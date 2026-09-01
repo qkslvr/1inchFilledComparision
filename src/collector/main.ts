@@ -41,7 +41,7 @@ try {
 }
 
 // --- KalqiX account: effective taker fee + deepest working book source ---
-let takerFeePpm = config.kalqixTakerFeeBps * 100n;
+let takerFeePpm: bigint = config.kalqixTakerFeePpm;
 if (!config.hasKalqix) {
   log(`kalqix quotes no ${config.chainLabel} market; its columns stay empty and its book is not sampled`);
 } else if (kalqixCreds()) {

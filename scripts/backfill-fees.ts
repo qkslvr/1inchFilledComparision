@@ -20,9 +20,9 @@ const apply = process.argv.includes('--apply');
 const db = await Db.open(config.chainId, { schemaOverride: config.schemaOverride });
 
 const feeCase = [
-  ['kalqix', config.kalqixTakerFeeBps],
-  ['kyber', config.kyber.feeBps],
-  ['bebop', config.bebop.feeBps],
+  ['kalqix', config.kalqixTakerFeePpm],
+  ['kyber', config.kyber.feePpm],
+  ['bebop', config.bebop.feePpm],
 ].map(([v, b]) => `WHEN '${v}' THEN ${Number(b)}`).join(' ');
 
 /** The settled fraction, from the winning solution's own sell amount.
