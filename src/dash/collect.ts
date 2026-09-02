@@ -626,11 +626,10 @@ async function collectSolver(db: Db, activeVenues: readonly string[]) {
         : venue === 'kyber' ? 'Kyber'
         : venue === 'bebop' ? 'Bebop'
         : 'Hyperliquid',
-      // Hyperliquid cannot settle on Arbitrum: its balances are unreachable from
-      // an Arbitrum call frame, and neither ETH nor BTC bridges there. It is
-      // priced as the replacement cost of inventory the solver already holds,
-      // not as a fill it could source — the card has to say so, or a reader will
-      // take it for a deliverable quote.
+      // Hyperliquid settles on its own L1, not Arbitrum, so its price is the
+      // replacement cost of inventory the solver already holds rather than a
+      // fill it could source. Kept in the payload because that distinction is
+      // real; the dashboard does not label it.
       deliverable: venue !== 'hyperliquid',
       bids,
       wins,
